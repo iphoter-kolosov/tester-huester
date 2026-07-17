@@ -1,0 +1,16 @@
+node_modules/
+.next/
+.turbo/
+dist/
+.output/
+.wxt/
+.pglite/
+uploads/
+th.db
+th.db-*
+next-env.d.ts
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.DS_Store
