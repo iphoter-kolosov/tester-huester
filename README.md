@@ -13,11 +13,13 @@ Extracted and re-architected from the QA/feedback system built inside eRENTAL.
 | `packages/db` — SQLite (Node 24 built-in `node:sqlite`), zero deps | ✅ working |
 | `apps/web` — `POST /api/ingest` + dashboard (list / detail / status) | ✅ working |
 | `apps/mcp` — MCP server: `list_reports`, `get_report`, `set_status` | ✅ working (smoke-tested) |
-| `packages/core` — capture/annotate/crop, extracted from the eRENTAL widget | ⏳ next |
-| `apps/extension` — MV3 extension (WXT) that captures on any site | ⏳ next |
+| `packages/core` — `ImageAnnotator` (draw / crop-with-undo / export), zero deps | ✅ unit-tested |
+| `apps/extension` — MV3 extension (WXT): capture any tab → annotate → send | ✅ builds + e2e-tested |
 
-The backend loop is proven end-to-end: an any-origin `POST /api/ingest` lands in SQLite, shows on the
-dashboard, and is readable over MCP by an agent.
+The whole loop is proven: the extension screenshots the visible tab, the tester annotates + crops, the
+report posts (through the background worker) to `/api/ingest`, lands in SQLite, shows on the dashboard,
+and is readable over MCP by an agent. Only "load unpacked in Chrome + capture on a live site" needs a
+human.
 
 ## Run it
 
@@ -28,7 +30,18 @@ pnpm --filter @th/web dev        # dashboard + API at http://localhost:4319
 pnpm --filter @th/mcp smoke      # drive the MCP server like an agent would
 ```
 
-Send a test report:
+Build + load the extension:
+
+```bash
+pnpm --filter @th/extension build   # → apps/extension/.output/chrome-mv3
+```
+
+Then in Chrome: `chrome://extensions` → enable **Developer mode** → **Load unpacked** →
+select `apps/extension/.output/chrome-mv3`. On any site press **Ctrl+Shift+Y** (or click the extension →
+📸 Capture). Draw / crop / note → **Send**. It appears on the dashboard and over MCP.
+(The popup sets the collector URL + ingest key; defaults point at local dev.)
+
+Send a test report by hand:
 
 ```bash
 curl -X POST http://localhost:4319/api/ingest -H 'content-type: application/json' \
