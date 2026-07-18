@@ -53,4 +53,6 @@ curl -X POST http://localhost:4319/api/ingest -H 'content-type: application/json
 pnpm + Turborepo · TypeScript · Next.js (App Router) for API + dashboard · `node:sqlite` for dev
 (swap to Postgres for prod) · MCP over stdio · WXT for the extension (coming).
 
-See `docs/SPEC-mvp-vertical-slice.md` for the design.
+See `docs/SPEC-mvp-vertical-slice.md` for the design, and
+`docs/COMPETITIVE-LANDSCAPE.md` for how this sits vs. existing tools (Faster Fixes, BugPin, Marker.io,
+BugHerd) and what that implies for the roadmap.
