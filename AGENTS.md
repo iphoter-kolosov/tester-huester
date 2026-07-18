@@ -19,10 +19,7 @@ Extracted from the QA/feedback system built inside eRENTAL.
 1. **"Self-hosted + MCP-native" is NOT a moat.** Competitors already ship it — Faster Fixes is
    open-source + self-hostable + MCP; BugPin is self-host + SQLite + Docker; Marker.io and BugHerd both
    have MCP servers. Treat it as table stakes. See `docs/COMPETITIVE-LANDSCAPE.md`.
-2. **Our biggest gap is the context we hand the agent.** We send `screenshot + note + pageUrl + viewport
-   + userAgent`. The leaders also capture **DOM selector + console logs + network requests** — the data
-   that actually lets an agent *fix* a bug instead of guessing from a picture. If you touch the
-   extension, this is the highest-leverage thing to add.
+2. **Agent-facing context — was our biggest gap, now largely closed.** We used to send only `screenshot + note + pageUrl + viewport + userAgent` — a picture with no fixable context. That gap is now shipped: every report carries a **ReproBundle** captured in the page's MAIN world and PII-masked before it leaves the browser — a **per-interacted-element DOM selector** (CSS via `@medv/finder` + role + accessible name + visible text + testid), **console logs** (incl. uncaught errors / unhandled rejections), **network-request metadata** (fetch + XHR: method, redacted URL, status, timing — no bodies, no headers), and an **action trail** ("the hands": click/input/change/submit/whitelisted keys) with numbered repro steps an agent reads over MCP. This reaches parity with the leaders on the axis that lets an agent *act* instead of guess. Remaining frontier (NOT built, don't claim it): a **full DOM / accessibility-tree snapshot** (we capture selectors for interacted elements only, never a page-wide HTML/AX dump, no outerHTML/styles/coordinates), **request/response bodies & headers**, cross-origin/iframe capture, full stack traces, and **continuous session replay** (only one still screenshot + bounded rings, no DOM timeline). A `chrome.debugger` "deep mode" is noted as future work. If you touch the extension, that snapshot/replay tier is the next leverage point.
 
 ## Repo facts (so you don't get surprised)
 
@@ -32,11 +29,10 @@ Extracted from the QA/feedback system built inside eRENTAL.
   Drizzle/Postgres, **Drizzle is not used** — `packages/db/src/schema.ts` and `client.ts` are empty
   stubs. Columns map 1:1 to an eventual Postgres schema.
 - **Known gaps in the current MVP** (don't assume these are done):
-  - The dashboard and `PATCH /api/reports/[id]` have **no auth**, though the SPEC/README promise a
-    shared-password gate. Blocker before any public deploy.
-  - `POST /api/ingest` has **no payload-size limit** (SPEC wants 413 on oversized).
-  - `apps/web/lib/storage.ts` writes to `public/uploads`; Next won't serve runtime-written files there
-    in production — needs an explicit route or R2.
+  - The dashboard and `PATCH /api/reports/[id]` have **no auth**, though the SPEC/README promise a shared-password gate. There is no `middleware.ts` and no password/session check anywhere. Blocker before any public deploy. **(still open)**
+  - `POST /api/ingest` **payload-size handling is only partial.** A 512 KB cap exists on the *sanitized context bundle*, but it merely **drops** the context (returns `null`) rather than returning **413** — the report is still created. The screenshot and the overall `req.json()` body are **unbounded** (no `bodySizeLimit`). SPEC wants a real 413 on oversized. **(still open)**
+  - `apps/web/lib/storage.ts` writes to `public/uploads` (an `UPLOAD_DIR` env override sets the *write* dir only). Next won't **serve** runtime-written files there in production and no route/rewrite/R2 serves the bytes, so dashboard `img src="/uploads/..."` will 404 in prod. **(still open)**
+  - Capture blind spots (by design, not bugs — but agents will ask): no full DOM/AX snapshot (interacted-element selectors only), no request/response bodies or headers, no cross-origin/iframe capture, no full stack traces, no session replay. See orientation point #2.
 
 ## Working agreement
 

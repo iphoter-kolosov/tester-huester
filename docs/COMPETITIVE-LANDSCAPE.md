@@ -30,7 +30,7 @@ MCP." That in-between position is real, but every serious player has now added a
 | **BugPin** | ✅ open-source, **SQLite + Docker**, GitHub integration | positioned for AI agents | screenshot + annotations (draw / arrows / text), GitHub |
 | **Marker.io** | ❌ SaaS (from ~$59/mo) | ✅ Marker MCP | screenshot, console logs, network requests, browser details |
 | **BugHerd** | ❌ SaaS (from ~$42/mo) | ✅ BugHerd MCP | feedback queue; agent makes changes in code / CMS / design tool |
-| **tester-huester (us)** | ✅ self-host, `node:sqlite`, zero-dep | ✅ `list_reports` / `get_report` / `set_status` | screenshot + note + pageUrl + viewport + userAgent |
+| **tester-huester (us)** | ✅ self-host, `node:sqlite`, zero-dep | ✅ `list_reports` / `get_report` / `set_status` / `get_repro_steps` | screenshot + note + pageUrl + viewport + userAgent, **plus a PII-masked ReproBundle: per-interacted-element DOM selector, console logs (+ uncaught errors), network-request metadata (fetch/XHR, no bodies/headers), and an action trail with numbered repro steps** — no full DOM snapshot / no session replay |
 
 ### The two we most resemble
 
@@ -50,6 +50,16 @@ MCP." That in-between position is real, but every serious player has now added a
    network requests**. For a product whose whole value is "the agent fixes the bug from the report," this
    is a core capability gap, *not* a v2 nicety — it's the difference between an agent that can act and one
    that has to guess from a picture. **Highest-leverage build item.**
+
+   **Update (2026-07-18):** this gap is now largely closed. Reports ship a MAIN-world, PII-masked
+   **ReproBundle** — **per-interacted-element DOM selector + console logs + network-request metadata +
+   action trail** — so an agent gets structured, fixable context, not just a picture. Precise scope: this
+   is **selector-level** DOM (CSS/role/name/text/testid for elements the tester actually touched), **not** a
+   full DOM/AX snapshot; network capture is **metadata only** (method/URL/status/timing, no bodies or
+   headers); and there is **no session replay** (one still screenshot + bounded rings). Reaches parity with
+   the leaders on structured page context; the untaken tier is a full DOM/AX snapshot + request/response
+   bodies + replay. So agent-context is no longer the differentiating gap — refocus the moat discussion on
+   the eRENTAL-origin vertical workflow (implication #3).
 
 3. **Candidate real moats** (pick a sharp angle — mere existence won't win):
    - **Deeper agent context** — capture console/network/DOM-selector to reach parity on the axis that
