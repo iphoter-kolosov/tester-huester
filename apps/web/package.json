@@ -12,7 +12,9 @@
     "@th/db": "workspace:*",
     "next": "^15.1.4",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "rrweb": "^2.1.0",
+    "rrweb-player": "^2.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.10.5",

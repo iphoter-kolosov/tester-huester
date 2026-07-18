@@ -11,10 +11,10 @@ Extracted and re-architected from the QA/feedback system built inside eRENTAL.
 | Piece | State |
 |---|---|
 | `packages/core` — `ImageAnnotator` + **repro-capture engine** (env / console / network / actions / selectors / redaction), zero runtime deps | ✅ unit-tested |
-| `packages/db` — SQLite (Node 24 built-in `node:sqlite`), zero deps, `context` JSON column | ✅ working |
-| `apps/web` — `POST /api/ingest` (+ context) + dashboard with **repro-context tabs** | ✅ working |
+| `packages/db` — SQLite (Node 24 built-in `node:sqlite`), zero deps, `context` + `replay_url` columns | ✅ working |
+| `apps/web` — `POST /api/ingest` (+ context + replay) + dashboard with **repro-context tabs + session-replay player** + blob serve-route | ✅ working |
 | `apps/mcp` — MCP server: `list_reports`, `get_report`, `set_status`, **`get_repro_steps`** | ✅ working (smoke-tested) |
-| `apps/extension` — MV3 (WXT): capture any tab → annotate → send, **+ MAIN-world context collector** | ✅ builds + e2e-tested |
+| `apps/extension` — MV3 (WXT): capture any tab → annotate → send, **+ MAIN-world context collector + rrweb "last 2 min" replay** | ✅ builds + e2e-tested |
 
 The whole loop is proven: the extension screenshots the visible tab, the tester annotates + crops, and —
 this is the new part — a MAIN-world collector script snapshots the **repro context** (what the app logged,
@@ -39,6 +39,15 @@ Every capture records a bounded, self-trimming bundle (the "sensory + motor" lay
 
 This is the wedge: it's what paid tools (Marker.io / BugHerd / Usersnap) gate behind $149+ tiers, here free
 and self-hosted — and it's MCP-native, so it doubles as the recorded "hands" of a future testing agent.
+
+### Session replay — the "last 2 minutes"
+
+While the extension is on it continuously records a **circular buffer of the last ~2 minutes** of the page
+as an [rrweb](https://github.com/rrweb-io/rrweb) DOM stream (not a screen video — a compact, replayable DOM
+timeline). On capture, that buffer rides along with the report and the dashboard replays it in a player.
+`maskAllInputs` is on, so field values never enter the recording; it's opt-out from the popup. Blobs
+(screenshots + replay JSON) are written to a data dir and served by `/api/asset/<name>` — which, unlike
+`public/`, works for runtime-written files in production. See `docs/SPEC-session-replay.md`.
 
 ## Run it
 

@@ -8,10 +8,11 @@
     "build": "wxt build",
     "zip": "wxt zip",
     "postinstall": "wxt prepare",
-    "test": "tsx lib/report.test.ts"
+    "test": "tsx lib/report.test.ts && tsx lib/replay.test.ts"
   },
   "dependencies": {
-    "@th/core": "workspace:*"
+    "@th/core": "workspace:*",
+    "rrweb": "^2.1.0"
   },
   "devDependencies": {
     "@types/chrome": "^0.0.287",

@@ -50,8 +50,9 @@ export default async function Home() {
               {r.reporter && <span>· {r.reporter}</span>}
             </div>
             {(() => {
-              const badges = contextBadges(r.context)
-              return badges ? (
+              const badges = contextBadges(r.context) ?? []
+              if (r.replayUrl) badges.push({ t: '▶ replay' })
+              return badges.length ? (
                 <div className="badges">
                   {badges.map((b) => (
                     <span key={b.t} className={'badge' + (b.bad ? ' bad' : '')}>{b.t}</span>

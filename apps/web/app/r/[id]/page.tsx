@@ -4,6 +4,7 @@ import type { ReproBundle } from '@th/core'
 import { repo } from '@th/db'
 import StatusSelect from '@/components/StatusSelect'
 import ReproContext from '@/components/ReproContext'
+import ReplayPlayer from '@/components/ReplayPlayer'
 
 export const dynamic = 'force-dynamic'
 
@@ -30,6 +31,7 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
         <span className="k">ID</span><span style={{ color: 'var(--muted)' }}>{r.id}</span>
       </div>
       {r.context ? <ReproContext context={r.context as ReproBundle} /> : null}
+      {r.replayUrl ? <ReplayPlayer url={r.replayUrl} /> : null}
     </main>
   )
 }

@@ -67,6 +67,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: 'empty' }, { status: 400, headers: CORS })
   }
 
+  // The rrweb replay is large → store it as its own blob and keep only a URL on the report.
+  let replayUrl: string | null = null
+  const replay = body.replay
+  if (Array.isArray(replay) && replay.length > 1) {
+    try {
+      replayUrl = await storage.putJson({ events: replay })
+    } catch (e) {
+      console.warn('ingest: replay store failed:', e)
+    }
+  }
+
   const row = repo.createReport({
     projectId: proj.id,
     note,
@@ -76,6 +87,7 @@ export async function POST(req: Request) {
     userAgent: clip(body.userAgent, 500),
     reporter: clip(body.reporter, 200),
     context: sanitizeContext(body.context),
+    replayUrl,
   })
 
   return NextResponse.json({ ok: true, id: row.id }, { headers: CORS })

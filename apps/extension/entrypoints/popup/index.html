@@ -16,12 +16,16 @@
       .cap { background: #0a84ff; color: #fff; }
       .hint { margin-top: 10px; color: #64748b; font-size: 11.5px; }
       .ok { color: #34d399; }
+      .toggle { display: flex; align-items: center; gap: 8px; margin-top: 12px; color: #e6edf7; font-size: 12px; cursor: pointer; }
+      .toggle input { width: auto; margin: 0; accent-color: #0a84ff; }
+      .toggle small { color: #64748b; }
     </style>
   </head>
   <body>
     <h1>🐞 tester-huester</h1>
     <label>Collector URL<input id="url" placeholder="http://localhost:4319" /></label>
     <label>Ingest key<input id="key" placeholder="th_demo_key_0001" /></label>
+    <label class="toggle"><input type="checkbox" id="replay" /> Record replay <small>(last ~2 min, inputs masked)</small></label>
     <div class="row">
       <button class="save" id="save">Save</button>
       <button class="cap" id="capture">📸 Capture</button>

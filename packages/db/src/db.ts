@@ -39,13 +39,17 @@ conn.exec(`
     reporter text,
     status text NOT NULL DEFAULT 'new',
     created_at integer NOT NULL,
-    context text
+    context text,
+    replay_url text
   );
 `)
 
-// Idempotent migration for DBs created before the `context` column existed (e.g. the demo th.db).
+// Idempotent migrations for DBs created before these columns existed (e.g. the demo th.db).
 if (!columnExists(conn, 'reports', 'context')) {
   conn.exec('ALTER TABLE reports ADD COLUMN context text')
+}
+if (!columnExists(conn, 'reports', 'replay_url')) {
+  conn.exec('ALTER TABLE reports ADD COLUMN replay_url text')
 }
 
 function columnExists(c: DatabaseSync, table: string, column: string): boolean {
@@ -59,14 +63,14 @@ export type Project = { id: string; name: string; ingestKey: string; createdAt: 
 export type Report = {
   id: string; projectId: string; note: string; screenshotUrl: string | null; pageUrl: string | null
   viewport: string | null; userAgent: string | null; reporter: string | null; status: string; createdAt: number
-  context: unknown | null
+  context: unknown | null; replayUrl: string | null
 }
 
 const toProject = (r: any): Project => ({ id: r.id, name: r.name, ingestKey: r.ingest_key, createdAt: r.created_at })
 const toReport = (r: any): Report => ({
   id: r.id, projectId: r.project_id, note: r.note, screenshotUrl: r.screenshot_url, pageUrl: r.page_url,
   viewport: r.viewport, userAgent: r.user_agent, reporter: r.reporter, status: r.status, createdAt: r.created_at,
-  context: parseJson(r.context),
+  context: parseJson(r.context), replayUrl: r.replay_url ?? null,
 })
 
 function parseJson(s: unknown): unknown | null {
@@ -81,7 +85,7 @@ function parseJson(s: unknown): unknown | null {
 export type NewReport = {
   projectId: string; note: string
   screenshotUrl?: string | null; pageUrl?: string | null; viewport?: string | null
-  userAgent?: string | null; reporter?: string | null; context?: unknown | null
+  userAgent?: string | null; reporter?: string | null; context?: unknown | null; replayUrl?: string | null
 }
 
 export const repo = {
@@ -99,9 +103,9 @@ export const repo = {
   createReport(x: NewReport): Report {
     const id = crypto.randomUUID()
     conn.prepare(
-      `INSERT INTO reports (id, project_id, note, screenshot_url, page_url, viewport, user_agent, reporter, status, created_at, context)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-    ).run(id, x.projectId, x.note, x.screenshotUrl ?? null, x.pageUrl ?? null, x.viewport ?? null, x.userAgent ?? null, x.reporter ?? null, 'new', Date.now(), x.context != null ? JSON.stringify(x.context) : null)
+      `INSERT INTO reports (id, project_id, note, screenshot_url, page_url, viewport, user_agent, reporter, status, created_at, context, replay_url)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(id, x.projectId, x.note, x.screenshotUrl ?? null, x.pageUrl ?? null, x.viewport ?? null, x.userAgent ?? null, x.reporter ?? null, 'new', Date.now(), x.context != null ? JSON.stringify(x.context) : null, x.replayUrl ?? null)
     return this.getReport(id)!
   },
   listReports(opts: { status?: string; limit?: number } = {}): Report[] {

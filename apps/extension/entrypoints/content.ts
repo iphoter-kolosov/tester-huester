@@ -3,6 +3,7 @@ import type { ReproBundle } from '@th/core'
 import { getConfig } from '@/lib/config'
 import { buildReport } from '@/lib/report'
 import { requestBundle } from '@/lib/bridge'
+import { startReplay, snapshotReplay, REPLAY_BLOCK_CLASS, type RREvent } from '@/lib/replay'
 
 // The in-page overlay. Lives in a shadow root so the host site's CSS can't touch it. Background hands us a
 // screenshot; we let the tester draw / crop / note, then post it (via background) to the collector.
@@ -10,13 +11,18 @@ export default defineContentScript({
   matches: ['<all_urls>'],
   runAt: 'document_idle',
   main() {
+    // Start buffering the last ~2 min of DOM replay immediately (opt-out via popup). Runs in the isolated
+    // world but observes the shared DOM, which is all rrweb needs.
+    getConfig().then((c) => { if (c.recordReplay) startReplay() }).catch(() => {})
+
     let open = false
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === 'TH_OPEN' && !open) {
         open = true
-        // Snapshot the repro bundle at trigger time — BEFORE the overlay mounts — so the tester's own clicks
-        // on our UI don't pollute the recorded action trail. Null on pages where the MAIN world didn't load.
-        requestBundle().then((context) => mount(msg.shot as string, context, () => { open = false }))
+        // Snapshot repro bundle AND replay at trigger time — BEFORE the overlay mounts — so the tester's own
+        // clicks on our UI don't pollute the trail/replay. Bundle is null where the MAIN world didn't load.
+        const replay = snapshotReplay()
+        requestBundle().then((context) => mount(msg.shot as string, context, replay, () => { open = false }))
       }
     })
   },
@@ -51,8 +57,9 @@ const CSS = `
 .ghost { background: transparent; border: 1px solid #223049; color: #e6edf7; }
 `
 
-function mount(shot: string, context: ReproBundle | null, onClose: () => void) {
+function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onClose: () => void) {
   const host = document.createElement('div')
+  host.className = REPLAY_BLOCK_CLASS // keep our own overlay out of any ongoing replay recording
   host.style.cssText = 'all: initial; position: fixed; inset: 0; z-index: 2147483647;'
   const root = host.attachShadow({ mode: 'open' })
   root.innerHTML = `
@@ -91,15 +98,16 @@ function mount(shot: string, context: ReproBundle | null, onClose: () => void) {
 
   // Show the tester what technical context was captured alongside the screenshot.
   const hint = q<HTMLElement>('.ctxhint')
+  const bits: string[] = []
   if (context) {
     const errs = (context.console ?? []).filter((c) => c.level === 'error').length
-    const bits: string[] = []
     if (context.actions?.length) bits.push(`<b>${context.actions.length}</b> steps`)
     if (context.console?.length) bits.push(`<b>${context.console.length}</b> console`)
     if (context.network?.length) bits.push(`<b>${context.network.length}</b> net`)
     if (errs) bits.push(`<span class="e"><b>${errs}</b> err</span>`)
-    hint.innerHTML = bits.length ? '📋 ' + bits.join(' · ') + ' captured' : ''
   }
+  if (replay.length) bits.push(`<b>▶</b> replay`)
+  hint.innerHTML = bits.length ? '📋 ' + bits.join(' · ') + ' captured' : ''
 
   const refresh = () => {
     undoBtn.disabled = !ann.canUndo()
@@ -145,7 +153,10 @@ function mount(shot: string, context: ReproBundle | null, onClose: () => void) {
     sendBtn.disabled = true
     setMsg('Sending…')
     try {
-      const res = await chrome.runtime.sendMessage({ type: 'TH_SEND', collectorUrl: cfg.collectorUrl, payload })
+      // Replay events ride alongside the report (they're large → the collector stores them as a blob, not
+      // in the report row). Cap serialized size so a churn-heavy page can't produce a monster payload.
+      const replayPayload = replay.length && JSON.stringify(replay).length < 4_000_000 ? replay : undefined
+      const res = await chrome.runtime.sendMessage({ type: 'TH_SEND', collectorUrl: cfg.collectorUrl, payload: { ...payload, replay: replayPayload } })
       if (res?.ok) { setMsg('Sent ✓', 'ok'); setTimeout(close, 900) }
       else { setMsg('Failed: ' + (res?.error || 'server error'), 'err'); sendBtn.disabled = false }
     } catch (e) {
