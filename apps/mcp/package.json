@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.13.0",
+    "@th/core": "workspace:*",
     "@th/db": "workspace:*",
     "zod": "^3.24.1"
   },

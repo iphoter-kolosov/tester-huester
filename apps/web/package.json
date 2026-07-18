@@ -8,6 +8,7 @@
     "start": "next start -p 4319"
   },
   "dependencies": {
+    "@th/core": "workspace:*",
     "@th/db": "workspace:*",
     "next": "^15.1.4",
     "react": "^19.0.0",

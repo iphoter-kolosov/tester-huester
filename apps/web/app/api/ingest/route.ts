@@ -13,6 +13,28 @@ const CORS = {
 }
 const clip = (v: unknown, n: number) => (typeof v === 'string' ? v.slice(0, n) : null)
 
+// Never trust the client: keep only known keys and re-cap the arrays server-side (defence in depth on top
+// of the extension's own caps). Drop the whole bundle if it serialises to something implausibly large.
+function sanitizeContext(v: unknown): Record<string, unknown> | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+  const c = v as Record<string, unknown>
+  const arr = (x: unknown, n: number) => (Array.isArray(x) ? x.slice(-n) : [])
+  const out: Record<string, unknown> = {
+    env: c.env && typeof c.env === 'object' ? c.env : undefined,
+    console: arr(c.console, 200),
+    network: arr(c.network, 200),
+    actions: arr(c.actions, 100),
+    capturedAt: typeof c.capturedAt === 'number' ? c.capturedAt : undefined,
+  }
+  try {
+    if (JSON.stringify(out).length > 512_000) return null
+  } catch {
+    return null
+  }
+  const hasSignal = out.env || (out.console as unknown[]).length || (out.network as unknown[]).length || (out.actions as unknown[]).length
+  return hasSignal ? out : null
+}
+
 export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS })
 }
@@ -53,6 +75,7 @@ export async function POST(req: Request) {
     viewport: clip(body.viewport, 40),
     userAgent: clip(body.userAgent, 500),
     reporter: clip(body.reporter, 200),
+    context: sanitizeContext(body.context),
   })
 
   return NextResponse.json({ ok: true, id: row.id }, { headers: CORS })

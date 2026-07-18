@@ -2,6 +2,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import { repo } from '@th/db'
+import { reproSteps, type ReproBundle } from '@th/core/repro'
 
 // The MCP surface: an AI agent (Claude Code, the client's agents) pulls captured reports, reads a report's
 // screenshot URL + note, and triages status — the loop's payoff. Reads the same SQLite the web/extension use.
@@ -34,6 +35,31 @@ server.tool(
   async ({ id, status }) => {
     const ok = repo.setStatus(id, status)
     return { content: [{ type: 'text', text: ok ? `report ${id} → ${status}` : `no report ${id}` }] }
+  },
+)
+
+// The payoff of the "one capture, two consumers" design: hand an agent a ready-to-replay repro —
+// numbered steps (from the recorded action trail) plus a triage summary (errors, failed requests, env).
+server.tool(
+  'get_repro_steps',
+  'Get an agent-ready reproduction for a report: numbered user steps (from the recorded action trail) plus a triage summary (console errors, failed network requests, environment). Returns note if the report has no captured context.',
+  { id: z.string() },
+  async ({ id }) => {
+    const r = repo.getReport(id)
+    if (!r) return { content: [{ type: 'text', text: `no report ${id}` }] }
+    const ctx = r.context as ReproBundle | null
+    if (!ctx) return { content: [{ type: 'text', text: `report ${id} has no captured repro context (screenshot/note only).` }] }
+    const steps = reproSteps(ctx)
+    const errors = (ctx.console ?? []).filter((c) => c.level === 'error')
+    const failed = (ctx.network ?? []).filter((n) => n.status === 0 || n.status >= 400)
+    const out = {
+      report: { id: r.id, note: r.note, pageUrl: r.pageUrl, status: r.status },
+      environment: ctx.env,
+      steps: steps.length ? steps : ['(no user actions were recorded)'],
+      consoleErrors: errors.map((e) => e.text),
+      failedRequests: failed.map((n) => `${n.method} ${n.url} → ${n.status || 'ERR'} (${n.ms}ms)`),
+    }
+    return { content: [{ type: 'text', text: JSON.stringify(out, null, 2) }] }
   },
 )
 

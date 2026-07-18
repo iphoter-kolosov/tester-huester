@@ -1,6 +1,8 @@
 import { ImageAnnotator, DEFAULT_COLORS } from '@th/core'
+import type { ReproBundle } from '@th/core'
 import { getConfig } from '@/lib/config'
 import { buildReport } from '@/lib/report'
+import { requestBundle } from '@/lib/bridge'
 
 // The in-page overlay. Lives in a shadow root so the host site's CSS can't touch it. Background hands us a
 // screenshot; we let the tester draw / crop / note, then post it (via background) to the collector.
@@ -12,7 +14,9 @@ export default defineContentScript({
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === 'TH_OPEN' && !open) {
         open = true
-        mount(msg.shot as string, () => { open = false })
+        // Snapshot the repro bundle at trigger time — BEFORE the overlay mounts — so the tester's own clicks
+        // on our UI don't pollute the recorded action trail. Null on pages where the MAIN world didn't load.
+        requestBundle().then((context) => mount(msg.shot as string, context, () => { open = false }))
       }
     })
   },
@@ -39,12 +43,15 @@ const CSS = `
 .msg { color: #8ea0bd; font-size: 12.5px; }
 .msg.err { color: #ff6b6b; }
 .msg.ok { color: #34d399; }
+.ctxhint { margin-left: auto; font-size: 11.5px; font-weight: 700; color: #8ea0bd; display: flex; gap: 6px; align-items: center; }
+.ctxhint b { color: #38bdf8; font-weight: 800; }
+.ctxhint .e { color: #fda4af; }
 .btn { margin-left: auto; height: 40px; padding: 0 20px; border: 0; border-radius: 10px; background: #0a84ff; color: #fff; font-weight: 800; cursor: pointer; }
 .btn:disabled { opacity: .5; cursor: default; }
 .ghost { background: transparent; border: 1px solid #223049; color: #e6edf7; }
 `
 
-function mount(shot: string, onClose: () => void) {
+function mount(shot: string, context: ReproBundle | null, onClose: () => void) {
   const host = document.createElement('div')
   host.style.cssText = 'all: initial; position: fixed; inset: 0; z-index: 2147483647;'
   const root = host.attachShadow({ mode: 'open' })
@@ -52,7 +59,7 @@ function mount(shot: string, onClose: () => void) {
     <style>${CSS}</style>
     <div class="scrim" part="scrim">
       <div class="card">
-        <div class="head"><span class="title">🐞 Report an issue</span><button class="x" title="Close">✕</button></div>
+        <div class="head"><span class="title">🐞 Report an issue</span><span class="ctxhint"></span><button class="x" title="Close">✕</button></div>
         <canvas class="canvas"></canvas>
         <div class="tools">
           ${DEFAULT_COLORS.map((c, i) => `<button class="sw${i === 0 ? ' on' : ''}" data-c="${c}" style="background:${c}"></button>`).join('')}
@@ -81,6 +88,18 @@ function mount(shot: string, onClose: () => void) {
   const undoBtn = q<HTMLButtonElement>('[data-act="undo"]')
 
   const close = () => { host.remove(); onClose() }
+
+  // Show the tester what technical context was captured alongside the screenshot.
+  const hint = q<HTMLElement>('.ctxhint')
+  if (context) {
+    const errs = (context.console ?? []).filter((c) => c.level === 'error').length
+    const bits: string[] = []
+    if (context.actions?.length) bits.push(`<b>${context.actions.length}</b> steps`)
+    if (context.console?.length) bits.push(`<b>${context.console.length}</b> console`)
+    if (context.network?.length) bits.push(`<b>${context.network.length}</b> net`)
+    if (errs) bits.push(`<span class="e"><b>${errs}</b> err</span>`)
+    hint.innerHTML = bits.length ? '📋 ' + bits.join(' · ') + ' captured' : ''
+  }
 
   const refresh = () => {
     undoBtn.disabled = !ann.canUndo()
@@ -120,6 +139,7 @@ function mount(shot: string, onClose: () => void) {
       innerWidth: window.innerWidth,
       innerHeight: window.innerHeight,
       userAgent: navigator.userAgent,
+      context,
     })
     if (!payload.note && !payload.screenshot) { setMsg('Add a note or a screenshot', 'err'); return }
     sendBtn.disabled = true
