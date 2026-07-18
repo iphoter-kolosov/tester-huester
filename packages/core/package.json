@@ -4,10 +4,14 @@
   "private": true,
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./repro": "./src/capture/bundle.ts"
   },
   "scripts": {
-    "test": "tsx src/annotator.test.ts"
+    "test": "tsx src/annotator.test.ts && tsx src/capture/capture.test.ts"
+  },
+  "dependencies": {
+    "@medv/finder": "^3.2.0"
   },
   "devDependencies": {
     "tsx": "^4.19.2"

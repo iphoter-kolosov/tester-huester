@@ -39,6 +39,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: ^1.13.0
         version: 1.29.0(zod@3.25.76)
+      '@th/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@th/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -52,6 +55,9 @@ importers:
 
   apps/web:
     dependencies:
+      '@th/core':
+        specifier: workspace:*
+        version: link:../../packages/core
       '@th/db':
         specifier: workspace:*
         version: link:../../packages/db
@@ -79,6 +85,10 @@ importers:
         version: 5.9.3
 
   packages/core:
+    dependencies:
+      '@medv/finder':
+        specifier: ^3.2.0
+        version: 3.2.0
     devDependencies:
       tsx:
         specifier: ^4.19.2
@@ -619,6 +629,9 @@ packages:
 
   '@jridgewell/sourcemap-codec@1.5.5':
     resolution: {integrity: sha512-cYQ9310grqxueWbl+WuIUIaiUaDcj7WOq5fVhEljNVgRfOUhY9fy2zTvfoqWsnebh8Sl70VScFbICvJnLKB0Og==}
+
+  '@medv/finder@3.2.0':
+    resolution: {integrity: sha512-JmU7JIBwyL8RAzefvzALT4sP2M0biGk8i2invAgpQmma/QgfsaqoHIvJ7S0YC8n9hUVG8X3Leul2nGa06PvhbQ==}
 
   '@modelcontextprotocol/sdk@1.29.0':
     resolution: {integrity: sha512-zo37mZA9hJWpULgkRpowewez1y6ML5GsXJPY8FI0tBBCd77HEvza4jDqRKOXgHNn867PVGCyTdzqpz0izu5ZjQ==}
@@ -2993,6 +3006,8 @@ snapshots:
     optional: true
 
   '@jridgewell/sourcemap-codec@1.5.5': {}
+
+  '@medv/finder@3.2.0': {}
 
   '@modelcontextprotocol/sdk@1.29.0(zod@3.25.76)':
     dependencies:

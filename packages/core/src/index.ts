@@ -1,2 +1,17 @@
 export { ImageAnnotator, DEFAULT_COLORS } from './annotator'
 export type { Point, Stroke, AnnotatorOptions } from './annotator'
+
+// Capture core — the "sensory + motor" layer. One capture, two consumers (human report + agent trace).
+export { Ring } from './capture/ring'
+export { captureEnv } from './capture/env'
+export { bestSelector } from './capture/selector'
+export { patchConsole, formatArgs } from './capture/console-buffer'
+export { wrapFetchXhr } from './capture/network-buffer'
+export { ActionRecorder, toStep } from './capture/actions'
+export { assembleBundle, reproSteps, CAPS } from './capture/bundle'
+export { maskInputValue, redactHeaders, redactUrl, scrubTokens, isSensitiveField, MASK } from './capture/redact'
+export type { ReproBundle, ConsoleEntry, NetworkEntry, ActionStep, EnvInfo, SelectorCandidates } from './capture/types'
+export type { Unpatch } from './capture/console-buffer'
+export type { Unwrap } from './capture/network-buffer'
+export type { ActionEventLike } from './capture/actions'
+export type { BundleSources } from './capture/bundle'
