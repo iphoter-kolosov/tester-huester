@@ -80,24 +80,27 @@ assert.ok(a.canRedo(), 'erase can be redone')
 // 8. width presets don't throw and are accepted
 a.setWidth('thin'); a.setWidth('thick'); a.setWidth('med')
 
-// 9. crop a 100x80 region → canvas resized, tool back to draw, crop is undoable
+// 9. crop a 100x80 region → canvas resized, tool back to draw, crop is on the unified undo stack
 a.setTool('crop')
 a.pointerDown(20, 20); a.pointerMove(120, 100); a.pointerUp()
-assert.ok(a.canUndoCrop(), 'crop recorded in history')
+assert.ok(a.canUndo(), 'crop recorded on the undo stack')
 assert.equal(main.width, 100, 'canvas cropped width')
 assert.equal(main.height, 80, 'canvas cropped height')
 assert.equal(a.tool, 'draw', 'tool reset to draw after crop')
 
-// 10. undo the crop → full frame restored
-a.undoCrop()
-assert.equal(main.width, 200, 'undoCrop restored width')
-assert.equal(main.height, 150, 'undoCrop restored height')
-assert.ok(!a.canUndoCrop(), 'crop history emptied')
+// 10. undo (Ctrl+Z) reverses the crop → full frame restored; redo re-applies it
+a.undo()
+assert.equal(main.width, 200, 'undo restored pre-crop width')
+assert.equal(main.height, 150, 'undo restored pre-crop height')
+assert.ok(a.canRedo(), 'crop can be redone')
+a.redo()
+assert.equal(main.width, 100, 'redo re-applied the crop')
+a.undo() // back to the full frame for the remaining checks
 
 // 11. a too-small crop drag is ignored (mis-tap protection)
 a.setTool('crop')
 a.pointerDown(10, 10); a.pointerMove(15, 15); a.pointerUp()
-assert.ok(!a.canUndoCrop(), 'tiny crop ignored')
+assert.equal(main.width, 200, 'tiny crop ignored — size unchanged')
 
 // 12. clearAll wipes the whole primitive stack
 a.setTool('draw')

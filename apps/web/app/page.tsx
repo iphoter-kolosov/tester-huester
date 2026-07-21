@@ -29,67 +29,91 @@ function ago(ms: number): string {
   return `${Math.floor(h / 24)}d ago`
 }
 
-// Note taxonomy → RU labels + colour class (see globals.css .tp-*).
 const TYPE_LABEL: Record<string, string> = { feature: 'Фича', bug: 'Баг', fix: 'Правка', text: 'Текст' }
 const TYPE_ORDER = ['feature', 'bug', 'fix', 'text']
 const SEV_LABEL: Record<string, string> = { low: 'low', med: 'med', high: 'high', crit: 'crit' }
 const STATUS_ORDER = ['new', 'triaged', 'fixed', 'wontfix']
+const NO_SITE = '(no site)'
 
-// Origin (host) of the page the note was captured on — used as the sub-grouping signal within a project.
-function host(pageUrl: string | null): string | null {
-  if (!pageUrl) return null
+// The site a note belongs to = the host of the page it was captured on. This is the real "с какого сайта"
+// signal — independent of which project (ingest key) it was sent under.
+function host(pageUrl: string | null): string {
+  if (!pageUrl) return NO_SITE
   try {
     return new URL(pageUrl).host
   } catch {
-    return null
+    return NO_SITE
   }
 }
 
-export default async function Home({ searchParams }: { searchParams: Promise<{ project?: string; type?: string; status?: string }> }) {
+export default async function Home({
+  searchParams,
+}: {
+  searchParams: Promise<{ site?: string; type?: string; status?: string; sort?: string }>
+}) {
   if (!(await isAuthed())) redirect('/login')
   const sp = await searchParams
-  const f = {
-    project: sp.project || '',
-    type: sp.type || '',
-    status: sp.status || '',
-  }
+  const f = { site: sp.site || '', type: sp.type || '', status: sp.status || '', sort: sp.sort === 'old' ? 'old' : 'new' }
 
   const projects = repo.listProjects()
   const projName = new Map(projects.map((p) => [p.id, p.name] as const))
-  // Fetch everything once; totals need the unfiltered set, the list applies the active filters in JS.
-  const all = repo.listReports({ limit: 500 })
+  const all = repo.listReports({ limit: 1000 }) // newest-first from the DB
+
+  // Every distinct site seen in the data — powers the Site filter.
+  const siteCounts = new Map<string, number>()
+  for (const r of all) siteCounts.set(host(r.pageUrl), (siteCounts.get(host(r.pageUrl)) ?? 0) + 1)
+  const siteList = [...siteCounts.keys()].sort((a, b) => (siteCounts.get(b)! - siteCounts.get(a)!) || a.localeCompare(b))
 
   const matches = (r: Report) =>
-    (!f.project || r.projectId === f.project) &&
+    (!f.site || host(r.pageUrl) === f.site) &&
     (!f.type || r.type === f.type) &&
     (!f.status || r.status === f.status)
   const shown = all.filter(matches)
+  const hasFilter = !!(f.site || f.type || f.status)
 
-  const byProject = new Map<string, Report[]>()
+  // Group the visible notes BY SITE. Order notes within a group by the chosen sort; order the groups by their
+  // most-recent note so the freshest site floats to the top.
+  const bySite = new Map<string, Report[]>()
   for (const r of shown) {
-    const arr = byProject.get(r.projectId) ?? []
+    const k = host(r.pageUrl)
+    const arr = bySite.get(k) ?? []
     arr.push(r)
-    byProject.set(r.projectId, arr)
+    bySite.set(k, arr)
   }
-  const totalNew = (pid: string) => all.filter((r) => r.projectId === pid && r.status === 'new').length
-  const totalAll = (pid: string) => all.filter((r) => r.projectId === pid).length
-
-  // Show the selected project only when filtering by it; otherwise every project (so read keys stay visible).
-  const visibleProjects = f.project ? projects.filter((p) => p.id === f.project) : projects
-  const hasFilter = !!(f.project || f.type || f.status)
+  const groups = [...bySite.entries()].map(([site, rows]) => {
+    rows.sort((a, b) => (f.sort === 'old' ? a.createdAt - b.createdAt : b.createdAt - a.createdAt))
+    const newest = Math.max(...rows.map((r) => r.createdAt))
+    return { site, rows, newest }
+  })
+  groups.sort((a, b) => (f.sort === 'old' ? a.newest - b.newest : b.newest - a.newest))
 
   return (
     <main className="wrap">
       <div className="h">
         <span className="h1">🐞 Reports</span>
-        <span className="c">{shown.length}{hasFilter ? ` / ${all.length}` : ''} notes · {projects.length} sites</span>
+        <span className="c">
+          {shown.length}
+          {hasFilter ? ` / ${all.length}` : ''} notes · {siteList.length} sites
+        </span>
       </div>
 
-      <form className="filters" action="/" method="get">
-        <select name="project" defaultValue={f.project} className="fsel">
-          <option value="">All sites</option>
+      {projects.length > 0 && (
+        <div className="keys">
+          <span className="keyslbl">agent keys</span>
           {projects.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
+            <span className="keychip" key={p.id} title="Read key — give it to a QA agent (REST ?projectKey= / MCP TH_PROJECT_KEY)">
+              <b>{p.name}</b>
+              <code>{p.readKey || '—'}</code>
+            </span>
+          ))}
+        </div>
+      )}
+
+      <form className="filters" action="/" method="get">
+        <select name="site" defaultValue={f.site} className="fsel">
+          <option value="">All sites</option>
+          {siteList.map((s) => (
+            <option key={s} value={s}>{s} ({siteCounts.get(s)})</option>
           ))}
         </select>
         <select name="type" defaultValue={f.type} className="fsel">
@@ -104,71 +128,64 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ p
             <option key={s} value={s}>{s}</option>
           ))}
         </select>
+        <select name="sort" defaultValue={f.sort} className="fsel">
+          <option value="new">Newest first</option>
+          <option value="old">Oldest first</option>
+        </select>
         <button type="submit" className="fbtn">Filter</button>
-        {hasFilter ? <Link href="/" className="freset">Reset</Link> : null}
+        {hasFilter || f.sort === 'old' ? <Link href="/" className="freset">Reset</Link> : null}
       </form>
 
-      {projects.length === 0 && (
-        <div className="empty">No sites yet. Seed a project, then capture from the extension (or POST to <code>/api/ingest</code>).</div>
+      {all.length === 0 && (
+        <div className="empty">No notes yet. Capture from the extension (Ctrl+Shift+Y) or POST to <code>/api/ingest</code>.</div>
       )}
+      {all.length > 0 && shown.length === 0 && <div className="empty">No notes match the filter.</div>}
 
-      {visibleProjects.map((p) => {
-        const rows = byProject.get(p.id) ?? []
-        return (
-          <section className="proj" key={p.id}>
-            <div className="projhead">
-              <div className="projmeta">
-                <span className="projname">{p.name}</span>
-                <span className="projcounts">{totalNew(p.id)} new · {totalAll(p.id)} total</span>
-              </div>
-              <div className="projkey" title="Read key — give this to a QA agent (REST ?projectKey= / MCP TH_PROJECT_KEY)">
-                <span className="projkeylbl">agent key</span>
-                <code>{p.readKey || '—'}</code>
-              </div>
+      {groups.map(({ site, rows }) => (
+        <section className="proj" key={site}>
+          <div className="projhead">
+            <div className="projmeta">
+              <span className="projname">{site}</span>
+              <span className="projcounts">{rows.length} {rows.length === 1 ? 'note' : 'notes'}</span>
             </div>
+          </div>
 
-            {rows.length === 0 ? (
-              <div className="projempty">{hasFilter ? 'No notes match the filter.' : 'No notes yet.'}</div>
-            ) : (
-              rows.map((r) => {
-                const badges = contextBadges(r.context) ?? []
-                if (r.replayUrl) badges.push({ t: '▶ replay' })
-                const org = host(r.pageUrl)
-                return (
-                  <div className="row" key={r.id}>
-                    {r.screenshotUrl ? <img className="thumb" src={r.screenshotUrl} alt="" /> : <span className="noimg">📷</span>}
-                    <div className="mid">
-                      <div className="tags">
-                        <span className={'tp tp-' + r.type}>{TYPE_LABEL[r.type] ?? r.type}</span>
-                        {r.severity ? <span className={'sv sv-' + r.severity}>{SEV_LABEL[r.severity] ?? r.severity}</span> : null}
-                        {org ? <span className="org">{org}</span> : null}
-                      </div>
-                      <div className={'note' + (r.note ? '' : ' empty2')}>{r.note || 'no note'}</div>
-                      <div className="meta">
-                        <span>{ago(r.createdAt)}</span>
-                        {r.pageUrl && <a href={r.pageUrl} target="_blank" rel="noreferrer">{r.pageUrl}</a>}
-                        {r.viewport && <span>{r.viewport}</span>}
-                        {r.reporter && <span>· {r.reporter}</span>}
-                      </div>
-                      {badges.length ? (
-                        <div className="badges">
-                          {badges.map((b) => (
-                            <span key={b.t} className={'badge' + (b.bad ? ' bad' : '')}>{b.t}</span>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className="right">
-                      <StatusSelect id={r.id} value={r.status} />
-                      <Link className="open" href={`/r/${r.id}`}>open →</Link>
-                    </div>
+          {rows.map((r) => {
+            const badges = contextBadges(r.context) ?? []
+            if (r.replayUrl) badges.push({ t: '▶ replay' })
+            return (
+              <div className="row" key={r.id}>
+                {r.screenshotUrl ? <img className="thumb" src={r.screenshotUrl} alt="" /> : <span className="noimg">📷</span>}
+                <div className="mid">
+                  <div className="tags">
+                    <span className={'tp tp-' + r.type}>{TYPE_LABEL[r.type] ?? r.type}</span>
+                    {r.severity ? <span className={'sv sv-' + r.severity}>{SEV_LABEL[r.severity] ?? r.severity}</span> : null}
+                    <span className="proj-tag">{projName.get(r.projectId) ?? 'project'}</span>
                   </div>
-                )
-              })
-            )}
-          </section>
-        )
-      })}
+                  <div className={'note' + (r.note ? '' : ' empty2')}>{r.note || 'no note'}</div>
+                  <div className="meta">
+                    <span>{ago(r.createdAt)}</span>
+                    {r.pageUrl && <a href={r.pageUrl} target="_blank" rel="noreferrer">{r.pageUrl}</a>}
+                    {r.viewport && <span>{r.viewport}</span>}
+                    {r.reporter && <span>· {r.reporter}</span>}
+                  </div>
+                  {badges.length ? (
+                    <div className="badges">
+                      {badges.map((b) => (
+                        <span key={b.t} className={'badge' + (b.bad ? ' bad' : '')}>{b.t}</span>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+                <div className="right">
+                  <StatusSelect id={r.id} value={r.status} />
+                  <Link className="open" href={`/r/${r.id}`}>open →</Link>
+                </div>
+              </div>
+            )
+          })}
+        </section>
+      ))}
     </main>
   )
 }

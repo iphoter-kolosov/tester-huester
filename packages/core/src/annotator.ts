@@ -23,7 +23,7 @@ export type Tool = 'draw' | 'arrow' | 'rect' | 'text' | 'eraser' | 'crop'
 
 // Undo/redo works over a command log so erasing (which removes a primitive from the middle of the stack) is
 // reversible in the same stack as adding.
-type Cmd = { op: 'add'; prim: Prim } | { op: 'erase'; prim: Prim; index: number }
+type Cmd = { op: 'add'; prim: Prim } | { op: 'erase'; prim: Prim; index: number } | { op: 'crop'; pre: Snapshot; post: Snapshot }
 
 type Drawable = CanvasImageSource & { width: number; height: number }
 type Snapshot = { img: Drawable | null; prims: Prim[]; w: number; h: number }
@@ -65,6 +65,7 @@ function distToSeg(p: Point, a: Point, b: Point): number {
 export class ImageAnnotator {
   color: string
   width: Width
+  textSize: Width = 'med'
   tool: Tool = 'draw'
 
   private canvas: HTMLCanvasElement
@@ -77,7 +78,6 @@ export class ImageAnnotator {
   private prims: Prim[] = []
   private undoStack: Cmd[] = []
   private redoStack: Cmd[] = []
-  private cropHist: Snapshot[] = []
   private cropRect: { x0: number; y0: number; x1: number; y1: number } | null = null
   private drawing = false
   private current: Prim | null = null // in-progress primitive, committed on pointerUp
@@ -110,7 +110,6 @@ export class ImageAnnotator {
     this.prims = []
     this.undoStack = []
     this.redoStack = []
-    this.cropHist = []
     this.cropRect = null
     this.current = null
     this.tool = 'draw'
@@ -120,6 +119,7 @@ export class ImageAnnotator {
 
   setColor(c: string): void { this.color = c; this.onChange() }
   setWidth(w: Width): void { this.width = w; this.onChange() }
+  setTextSize(w: Width): void { this.textSize = w; this.onChange() }
   setTool(t: Tool): void { this.tool = t; this.redraw(); this.onChange() }
 
   pointerDown(clientX: number, clientY: number): void {
@@ -166,13 +166,15 @@ export class ImageAnnotator {
   canUndo(): boolean { return this.undoStack.length > 0 }
   canRedo(): boolean { return this.redoStack.length > 0 }
   canClear(): boolean { return this.prims.length > 0 }
-  canUndoCrop(): boolean { return this.cropHist.length > 0 }
 
+  // One unified timeline: adds, erases AND crops all undo/redo through the same stack, so a single Undo (or
+  // Ctrl+Z) reverses whatever happened last — including a crop.
   undo(): void {
     const cmd = this.undoStack.pop()
     if (!cmd) return
     if (cmd.op === 'add') { const i = this.prims.lastIndexOf(cmd.prim); if (i >= 0) this.prims.splice(i, 1) }
-    else { this.prims.splice(Math.min(cmd.index, this.prims.length), 0, cmd.prim) }
+    else if (cmd.op === 'erase') { this.prims.splice(Math.min(cmd.index, this.prims.length), 0, cmd.prim) }
+    else { this.restoreSnapshot(cmd.pre) }
     this.redoStack.push(cmd)
     this.redraw(); this.onChange()
   }
@@ -181,9 +183,19 @@ export class ImageAnnotator {
     const cmd = this.redoStack.pop()
     if (!cmd) return
     if (cmd.op === 'add') { this.prims.push(cmd.prim) }
-    else { const i = this.prims.lastIndexOf(cmd.prim); if (i >= 0) this.prims.splice(i, 1) }
+    else if (cmd.op === 'erase') { const i = this.prims.lastIndexOf(cmd.prim); if (i >= 0) this.prims.splice(i, 1) }
+    else { this.restoreSnapshot(cmd.post) }
     this.undoStack.push(cmd)
     this.redraw(); this.onChange()
+  }
+
+  // Restore a whole frame (image + primitives + size) — used to reverse/replay a crop within the unified stack.
+  private restoreSnapshot(snap: Snapshot): void {
+    this.img = snap.img
+    this.prims = snap.prims.map(deepPrim)
+    this.current = null
+    this.canvas.width = snap.w
+    this.canvas.height = snap.h
   }
 
   clearAll(): void {
@@ -195,21 +207,6 @@ export class ImageAnnotator {
   }
   // Back-compat alias.
   clearDraw(): void { this.clearAll() }
-
-  // Reverse the last crop: restore the pre-crop image AND its primitives and size.
-  undoCrop(): void {
-    const snap = this.cropHist.pop()
-    if (!snap) return
-    this.img = snap.img
-    this.prims = snap.prims.map(deepPrim)
-    this.undoStack = []
-    this.redoStack = []
-    this.current = null
-    this.canvas.width = snap.w
-    this.canvas.height = snap.h
-    this.tool = 'draw'
-    this.redraw(); this.onChange()
-  }
 
   // Default JPEG (small, good for photo screenshots); pass 'image/png' for crisp lines / dark palettes.
   toDataURL(quality = 0.85, type: 'image/jpeg' | 'image/png' = 'image/jpeg'): string {
@@ -283,7 +280,10 @@ export class ImageAnnotator {
     const base = Math.max(2.5, this.canvas.width / 320)
     return base * WIDTH_MUL[w]
   }
-  private defaultTextSize(): number { return Math.max(14, Math.round(this.canvas.width / 32)) }
+  private defaultTextSize(): number {
+    const base = Math.max(14, Math.round(this.canvas.width / 34))
+    return Math.round(base * ({ thin: 0.8, med: 1.2, thick: 1.9 } as Record<Width, number>)[this.textSize])
+  }
 
   private drawPrim(ctx: CanvasRenderingContext2D, prim: Prim): void {
     switch (prim.kind) {
@@ -369,16 +369,17 @@ export class ImageAnnotator {
     off.width = Math.round(w); off.height = Math.round(h)
     off.getContext('2d')!.drawImage(src, x, y, w, h, 0, 0, off.width, off.height)
 
-    // Remember the whole pre-crop frame so undoCrop restores it.
-    this.cropHist.push({ img: this.img, prims: this.prims.map(deepPrim), w: c.width, h: c.height })
+    const pre: Snapshot = { img: this.img, prims: this.prims.map(deepPrim), w: c.width, h: c.height }
     this.img = off
     this.prims = []
-    this.undoStack = []
-    this.redoStack = []
     this.current = null
     this.canvas.width = off.width
     this.canvas.height = off.height
     this.tool = 'draw'
+    const post: Snapshot = { img: this.img, prims: [], w: off.width, h: off.height }
+    // Crop joins the unified undo timeline (below any prims drawn afterwards), so Undo / Ctrl+Z reverses it.
+    this.undoStack.push({ op: 'crop', pre, post })
+    this.redoStack = []
     this.redraw(); this.onChange()
   }
 }

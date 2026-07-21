@@ -87,8 +87,15 @@ const CSS = `
 .btn { margin-left: auto; height: 40px; padding: 0 20px; border: 0; border-radius: 10px; background: #0a84ff; color: #fff; font-weight: 800; cursor: pointer; }
 .btn:disabled { opacity: .5; cursor: default; }
 .ghost { background: transparent; border: 1px solid #223049; color: #e6edf7; }
-.tin { position: fixed; z-index: 10; display: none; padding: 4px; background: #0f1626; border: 1px solid #0a84ff; border-radius: 8px; box-shadow: 0 8px 24px rgba(0,0,0,.5); }
-.tin input { width: 200px; height: 28px; padding: 0 8px; background: transparent; border: 0; outline: none; color: #e6edf7; font: 700 14px system-ui, sans-serif; }
+.tin { position: fixed; z-index: 12; display: none; flex-direction: column; gap: 6px; padding: 8px; background: #0f1626; border: 1px solid #0a84ff; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.6); }
+.tin input { width: 260px; height: 32px; padding: 0 10px; background: #131a2b; border: 1px solid #223049; border-radius: 7px; outline: none; color: #e6edf7; font: 800 15px system-ui, sans-serif; }
+.tinrow { display: flex; align-items: center; gap: 6px; }
+.tinsz { display: inline-flex; gap: 4px; }
+.tinsz button { width: 26px; height: 24px; border: 1px solid #223049; background: #131a2b; color: #e6edf7; border-radius: 6px; font-weight: 800; font-size: 12px; cursor: pointer; }
+.tinsz button.on { border-color: #0a84ff; background: #0a84ff; color: #fff; }
+.tinhint { margin-left: auto; font-size: 11px; color: #8ea0bd; font-weight: 700; white-space: nowrap; }
+.tinhint b { color: #38bdf8; }
+.tmark { position: fixed; z-index: 11; display: none; width: 12px; height: 12px; margin: -6px 0 0 -6px; pointer-events: none; border: 2px solid #0a84ff; border-radius: 50%; box-shadow: 0 0 0 2px rgba(3,7,18,.6); }
 `
 
 function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onClose: () => void) {
@@ -114,10 +121,9 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
           ${WIDTHS.map((w) => `<button class="tb width${w.value === 'med' ? ' on' : ''}" data-w="${w.value}" title="${w.label}">${w.value === 'thin' ? '│' : w.value === 'med' ? '┃' : '█'}</button>`).join('')}
           <span class="vsep"></span>
           <button class="tb tool" data-tool="crop" title="Кадрировать">✂</button>
-          <button class="tb" data-act="uncrop" style="display:none">↶ Кроп</button>
           <span class="sep"></span>
-          <button class="tb" data-act="undo" disabled>↩ Undo</button>
-          <button class="tb" data-act="redo" disabled>↪ Redo</button>
+          <button class="tb" data-act="undo" disabled title="Отменить (Ctrl+Z)">↩ Undo</button>
+          <button class="tb" data-act="redo" disabled title="Повторить (Ctrl+Shift+Z)">↪ Redo</button>
           <button class="tb" data-act="clear" disabled>🗑 Очистить</button>
         </div>
         <div class="meta">
@@ -137,7 +143,18 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
           <button class="btn send">Send</button>
         </div>
       </div>
-      <div class="tin"><input type="text" placeholder="Текст…" /></div>
+      <div class="tmark"></div>
+      <div class="tin">
+        <input type="text" placeholder="Текст…" />
+        <div class="tinrow">
+          <span class="tinsz">
+            <button data-tsz="thin">S</button>
+            <button data-tsz="med" class="on">M</button>
+            <button data-tsz="thick">L</button>
+          </span>
+          <span class="tinhint"><b>&#8629;</b> поставить &#183; <b>Esc</b> отмена</span>
+        </div>
+      </div>
     </div>`
   document.documentElement.appendChild(host)
 
@@ -147,19 +164,30 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
   const msg = q<HTMLElement>('.msg')
   const titleEl = q<HTMLElement>('.title')
   const sendBtn = q<HTMLButtonElement>('.send')
-  const uncropBtn = q<HTMLButtonElement>('[data-act="uncrop"]')
   const undoBtn = q<HTMLButtonElement>('[data-act="undo"]')
   const redoBtn = q<HTMLButtonElement>('[data-act="redo"]')
   const clearBtn = q<HTMLButtonElement>('[data-act="clear"]')
   const tin = q<HTMLElement>('.tin')
   const tinInput = q<HTMLInputElement>('.tin input')
+  const tmark = q<HTMLElement>('.tmark')
 
   // Form state (shared with track A via the exact field names note/type/severity).
   let type: ReportType = 'bug'
   let severity: Severity = 'med'
   let pendingText: { x: number; y: number } | null = null
 
-  const close = () => { host.remove(); onClose() }
+  const close = () => { document.removeEventListener('keydown', onKey, true); host.remove(); onClose() }
+
+  // Ctrl/Cmd+Z = undo, Ctrl/Cmd+Shift+Z = redo — over the unified annotator stack (drawings AND crop). Skip
+  // while typing in the note or the text-input so native text-undo still works there.
+  function onKey(e: KeyboardEvent) {
+    if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return
+    const ae = root.activeElement as HTMLElement | null
+    if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')) return
+    e.preventDefault()
+    if (e.shiftKey) ann.redo(); else ann.undo()
+  }
+  document.addEventListener('keydown', onKey, true)
 
   const syncTitle = () => {
     const t = TYPES.find((x) => x.value === type)!
@@ -184,7 +212,6 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
     undoBtn.disabled = !ann.canUndo()
     redoBtn.disabled = !ann.canRedo()
     clearBtn.disabled = !ann.canClear()
-    uncropBtn.style.display = ann.canUndoCrop() ? '' : 'none'
     root.querySelectorAll('.tb.tool').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.tool === ann.tool))
     canvas.classList.toggle('crop', ann.tool === 'crop')
     canvas.classList.toggle('text', ann.tool === 'text')
@@ -193,20 +220,23 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
 
   const openTextInput = (clientX: number, clientY: number) => {
     pendingText = { x: clientX, y: clientY }
-    tin.style.left = Math.min(clientX, window.innerWidth - 230) + 'px'
-    tin.style.top = Math.min(clientY, window.innerHeight - 44) + 'px'
-    tin.style.display = 'block'
+    tin.style.left = Math.min(clientX, window.innerWidth - 300) + 'px'
+    tin.style.top = Math.min(clientY + 10, window.innerHeight - 92) + 'px'
+    tin.style.display = 'flex'
+    // A caret dot marks exactly where the text will anchor on the image.
+    tmark.style.left = clientX + 'px'; tmark.style.top = clientY + 'px'; tmark.style.display = 'block'
     tinInput.value = ''
     // Defer focus past the current pointer event — focusing during pointerdown (esp. with capture) is flaky.
     setTimeout(() => { tinInput.focus(); tinInput.select() }, 0)
   }
+  const hideTextInput = () => { tin.style.display = 'none'; tmark.style.display = 'none' }
   const commitTextInput = () => {
     const s = tinInput.value
-    tin.style.display = 'none'
+    hideTextInput()
     if (pendingText && s.trim()) ann.addText(pendingText.x, pendingText.y, s)
     pendingText = null
   }
-  const cancelTextInput = () => { tin.style.display = 'none'; pendingText = null }
+  const cancelTextInput = () => { hideTextInput(); pendingText = null }
 
   const ann = new ImageAnnotator(canvas, { onChange: refresh, onTextRequest: openTextInput })
   ann.setImage(shot).then(refresh).catch(() => setMsg('Could not load screenshot', 'err'))
@@ -254,7 +284,13 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
       root.querySelectorAll('.seg.sev button').forEach((b) => b.classList.toggle('on', b === el))
     }),
   )
-  uncropBtn.addEventListener('click', () => ann.undoCrop())
+  root.querySelectorAll('.tinsz button').forEach((el) => {
+    el.addEventListener('mousedown', (e) => e.preventDefault()) // keep the text input focused when picking a size
+    el.addEventListener('click', () => {
+      ann.setTextSize((el as HTMLElement).dataset.tsz as Width)
+      root.querySelectorAll('.tinsz button').forEach((b) => b.classList.toggle('on', b === el))
+    })
+  })
   undoBtn.addEventListener('click', () => ann.undo())
   redoBtn.addEventListener('click', () => ann.redo())
   clearBtn.addEventListener('click', () => ann.clearAll())
