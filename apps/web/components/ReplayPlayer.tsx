@@ -49,7 +49,12 @@ export default function ReplayPlayer({ url }: { url: string }) {
         const replayer = new Replayer(events as never, { root: host.current, skipInactive: true, mouseTail: false }) as unknown as Replayerish
         rep.current = replayer
         replayer.pause(0) // first frame, paused
-        const t = replayer.getMetaData().totalTime
+        // getMetaData().totalTime is unreliable in this rrweb build (often 0) — derive duration from the event
+        // timestamps, which are ground truth. (A near-zero span means recording only started at capture time,
+        // e.g. on a tab that was open before the extension loaded — see the hint below.)
+        const first = (events[0] as { timestamp?: number })?.timestamp ?? 0
+        const last = (events[events.length - 1] as { timestamp?: number })?.timestamp ?? first
+        const t = Math.max(replayer.getMetaData().totalTime || 0, last - first)
         totalRef.current = t
         setTotal(t)
         replayer.on('finish', () => {
@@ -135,6 +140,9 @@ export default function ReplayPlayer({ url }: { url: string }) {
             <input className="rcrange" type="range" min={0} max={Math.max(1, total)} value={Math.min(cur, total)} onChange={(e) => seek(Number(e.target.value))} />
             <span className="rct">{fmt(total)}</span>
           </div>
+        )}
+        {state === 'ready' && total < 1000 && (
+          <div className="ctxempty">Запись началась в момент захвата — истории почти нет. Держи вкладку открытой (или перезагрузи её), чтобы буфер накопил ~2 мин.</div>
         )}
       </div>
     </div>

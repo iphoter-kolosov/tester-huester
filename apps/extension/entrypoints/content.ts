@@ -50,11 +50,11 @@ const WIDTHS: { value: Width; label: string }[] = [
 const CSS = `
 :host, * { box-sizing: border-box; }
 .scrim { position: fixed; inset: 0; background: rgba(3,7,18,.82); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 16px; font: 14px system-ui, sans-serif; }
-.card { position: relative; display: flex; flex-direction: column; gap: 10px; width: min(1100px, 96vw); max-height: 94vh; background: #131a2b; color: #e6edf7; border: 1px solid #223049; border-radius: 14px; padding: 14px; box-shadow: 0 30px 80px -20px rgba(0,0,0,.7); }
+.card { position: relative; display: flex; flex-direction: column; gap: 10px; width: 98vw; max-width: 98vw; max-height: 96vh; background: #131a2b; color: #e6edf7; border: 1px solid #223049; border-radius: 14px; padding: 14px; box-shadow: 0 30px 80px -20px rgba(0,0,0,.7); }
 .head { display: flex; align-items: center; gap: 10px; }
 .title { font-weight: 800; }
 .head .x { margin-left: auto; width: 30px; height: 30px; border-radius: 50%; border: 1px solid #223049; background: #0f1626; color: #8ea0bd; cursor: pointer; }
-.canvas { display: block; margin: 0 auto; max-width: 100%; max-height: 56vh; border-radius: 10px; border: 1px solid #223049; background: #0f1626; touch-action: none; cursor: crosshair; }
+.canvas { display: block; margin: 0 auto; max-width: 100%; max-height: 74vh; border-radius: 10px; border: 1px solid #223049; background: #0f1626; touch-action: none; cursor: crosshair; }
 .canvas.crop { cursor: cell; }
 .canvas.text { cursor: text; }
 .canvas.eraser { cursor: pointer; }
@@ -194,10 +194,11 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
   const openTextInput = (clientX: number, clientY: number) => {
     pendingText = { x: clientX, y: clientY }
     tin.style.left = Math.min(clientX, window.innerWidth - 230) + 'px'
-    tin.style.top = clientY + 'px'
+    tin.style.top = Math.min(clientY, window.innerHeight - 44) + 'px'
     tin.style.display = 'block'
     tinInput.value = ''
-    tinInput.focus()
+    // Defer focus past the current pointer event — focusing during pointerdown (esp. with capture) is flaky.
+    setTimeout(() => { tinInput.focus(); tinInput.select() }, 0)
   }
   const commitTextInput = () => {
     const s = tinInput.value
@@ -210,7 +211,11 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
   const ann = new ImageAnnotator(canvas, { onChange: refresh, onTextRequest: openTextInput })
   ann.setImage(shot).then(refresh).catch(() => setMsg('Could not load screenshot', 'err'))
 
-  canvas.addEventListener('pointerdown', (e) => { canvas.setPointerCapture(e.pointerId); ann.pointerDown(e.clientX, e.clientY) })
+  canvas.addEventListener('pointerdown', (e) => {
+    // Text & eraser are single-click actions — capturing the pointer here would steal focus from the text input.
+    if (ann.tool !== 'text' && ann.tool !== 'eraser') canvas.setPointerCapture(e.pointerId)
+    ann.pointerDown(e.clientX, e.clientY)
+  })
   canvas.addEventListener('pointermove', (e) => ann.pointerMove(e.clientX, e.clientY))
   canvas.addEventListener('pointerup', () => ann.pointerUp())
   canvas.addEventListener('pointerleave', () => ann.pointerUp())
