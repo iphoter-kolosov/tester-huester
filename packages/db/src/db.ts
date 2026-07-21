@@ -16,57 +16,51 @@ function defaultFile(): string {
 }
 const file = path.resolve(process.env.SQLITE_FILE || defaultFile())
 
-// Cache the handle across Next's dev hot-reload.
+// Lazy, memoized connection. Opened on the FIRST query — never at module import — so that build-time module
+// evaluation (Next's "collecting page data") does not touch the filesystem when there is no DB / SQLITE_FILE.
+// The cache also survives Next's dev hot-reload.
 const g = globalThis as unknown as { __thsqlite?: DatabaseSync }
-const conn: DatabaseSync = g.__thsqlite ?? (g.__thsqlite = new DatabaseSync(file))
-
-conn.exec(`
-  PRAGMA journal_mode = WAL;
-  PRAGMA busy_timeout = 5000;
-  CREATE TABLE IF NOT EXISTS projects (
-    id text PRIMARY KEY,
-    name text NOT NULL,
-    ingest_key text NOT NULL UNIQUE,
-    created_at integer NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS reports (
-    id text PRIMARY KEY,
-    project_id text NOT NULL,
-    note text NOT NULL DEFAULT '',
-    screenshot_url text,
-    page_url text,
-    viewport text,
-    user_agent text,
-    reporter text,
-    status text NOT NULL DEFAULT 'new',
-    created_at integer NOT NULL,
-    context text,
-    replay_url text
-  );
-`)
-
-// Idempotent migrations for DBs created before these columns existed (e.g. the demo th.db).
-if (!columnExists(conn, 'reports', 'context')) {
-  conn.exec('ALTER TABLE reports ADD COLUMN context text')
+function db(): DatabaseSync {
+  if (g.__thsqlite) return g.__thsqlite
+  const c = new DatabaseSync(file)
+  g.__thsqlite = c
+  c.exec(`
+    PRAGMA journal_mode = WAL;
+    PRAGMA busy_timeout = 5000;
+    CREATE TABLE IF NOT EXISTS projects (
+      id text PRIMARY KEY,
+      name text NOT NULL,
+      ingest_key text NOT NULL UNIQUE,
+      created_at integer NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS reports (
+      id text PRIMARY KEY,
+      project_id text NOT NULL,
+      note text NOT NULL DEFAULT '',
+      screenshot_url text,
+      page_url text,
+      viewport text,
+      user_agent text,
+      reporter text,
+      status text NOT NULL DEFAULT 'new',
+      created_at integer NOT NULL,
+      context text,
+      replay_url text
+    );
+  `)
+  // Idempotent migrations for DBs created before these columns existed (e.g. the demo th.db).
+  if (!columnExists(c, 'reports', 'context')) c.exec('ALTER TABLE reports ADD COLUMN context text')
+  if (!columnExists(c, 'reports', 'replay_url')) c.exec('ALTER TABLE reports ADD COLUMN replay_url text')
+  // Note taxonomy: `type` classifies the note (feature/bug/fix/text); `severity` is an optional triage weight.
+  // `type` gets a NOT NULL DEFAULT so old rows read back as 'bug'; `severity` stays nullable (truly optional).
+  if (!columnExists(c, 'reports', 'type')) c.exec("ALTER TABLE reports ADD COLUMN type text NOT NULL DEFAULT 'bug'")
+  if (!columnExists(c, 'reports', 'severity')) c.exec('ALTER TABLE reports ADD COLUMN severity text')
+  // Per-project read key: read-only, single-project scope for an agent (REST/MCP) — no dashboard cookie, no
+  // write-capable ingest key. Added nullable, then backfilled for pre-existing projects.
+  if (!columnExists(c, 'projects', 'read_key')) c.exec('ALTER TABLE projects ADD COLUMN read_key text')
+  backfillReadKeys(c)
+  return c
 }
-if (!columnExists(conn, 'reports', 'replay_url')) {
-  conn.exec('ALTER TABLE reports ADD COLUMN replay_url text')
-}
-// Note taxonomy: `type` classifies the note (feature/bug/fix/text); `severity` is an optional triage weight.
-// Both land as columns that map 1:1 to the future Postgres schema. `type` gets a NOT NULL DEFAULT so old rows
-// read back as 'bug'; `severity` stays nullable so it's genuinely optional.
-if (!columnExists(conn, 'reports', 'type')) {
-  conn.exec("ALTER TABLE reports ADD COLUMN type text NOT NULL DEFAULT 'bug'")
-}
-if (!columnExists(conn, 'reports', 'severity')) {
-  conn.exec('ALTER TABLE reports ADD COLUMN severity text')
-}
-// Per-project read key: lets an agent (REST/MCP) read exactly one project's reports without the dashboard
-// cookie or the write-capable ingest key. Added nullable, then backfilled below for pre-existing projects.
-if (!columnExists(conn, 'projects', 'read_key')) {
-  conn.exec('ALTER TABLE projects ADD COLUMN read_key text')
-}
-backfillReadKeys(conn)
 
 function columnExists(c: DatabaseSync, table: string, column: string): boolean {
   const rows = c.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
@@ -122,32 +116,32 @@ export type NewReport = {
 
 export const repo = {
   getProjectByKey(key: string): Project | null {
-    const r = conn.prepare('SELECT * FROM projects WHERE ingest_key = ?').get(key)
+    const r = db().prepare('SELECT * FROM projects WHERE ingest_key = ?').get(key)
     return r ? toProject(r) : null
   },
   getProjectByReadKey(key: string): Project | null {
     if (!key) return null
-    const r = conn.prepare('SELECT * FROM projects WHERE read_key = ?').get(key)
+    const r = db().prepare('SELECT * FROM projects WHERE read_key = ?').get(key)
     return r ? toProject(r) : null
   },
   getProjectById(id: string): Project | null {
-    const r = conn.prepare('SELECT * FROM projects WHERE id = ?').get(id)
+    const r = db().prepare('SELECT * FROM projects WHERE id = ?').get(id)
     return r ? toProject(r) : null
   },
   listProjects(): Project[] {
-    const rows = conn.prepare('SELECT * FROM projects ORDER BY created_at ASC').all()
+    const rows = db().prepare('SELECT * FROM projects ORDER BY created_at ASC').all()
     return rows.map(toProject)
   },
   ensureProject(name: string, ingestKey: string): Project {
     const ex = this.getProjectByKey(ingestKey)
     if (ex) return ex
-    conn.prepare('INSERT INTO projects (id, name, ingest_key, read_key, created_at) VALUES (?,?,?,?,?)')
+    db().prepare('INSERT INTO projects (id, name, ingest_key, read_key, created_at) VALUES (?,?,?,?,?)')
       .run(crypto.randomUUID(), name, ingestKey, newReadKey(), Date.now())
     return this.getProjectByKey(ingestKey)!
   },
   createReport(x: NewReport): Report {
     const id = crypto.randomUUID()
-    conn.prepare(
+    db().prepare(
       `INSERT INTO reports (id, project_id, note, screenshot_url, page_url, viewport, user_agent, reporter, status, created_at, context, replay_url, type, severity)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     ).run(id, x.projectId, x.note, x.screenshotUrl ?? null, x.pageUrl ?? null, x.viewport ?? null, x.userAgent ?? null, x.reporter ?? null, 'new', Date.now(), x.context != null ? JSON.stringify(x.context) : null, x.replayUrl ?? null, x.type ?? 'bug', x.severity ?? null)
@@ -163,15 +157,15 @@ export const repo = {
     if (opts.type) { where.push('type = ?'); args.push(opts.type) }
     if (opts.status) { where.push('status = ?'); args.push(opts.status) }
     const clause = where.length ? ` WHERE ${where.join(' AND ')}` : ''
-    const rows = conn.prepare(`SELECT * FROM reports${clause} ORDER BY created_at DESC LIMIT ?`).all(...args, lim)
+    const rows = db().prepare(`SELECT * FROM reports${clause} ORDER BY created_at DESC LIMIT ?`).all(...args, lim)
     return rows.map(toReport)
   },
   getReport(id: string): Report | null {
-    const r = conn.prepare('SELECT * FROM reports WHERE id = ?').get(id)
+    const r = db().prepare('SELECT * FROM reports WHERE id = ?').get(id)
     return r ? toReport(r) : null
   },
   setStatus(id: string, status: string): boolean {
-    return conn.prepare('UPDATE reports SET status = ? WHERE id = ?').run(status, id).changes > 0
+    return db().prepare('UPDATE reports SET status = ? WHERE id = ?').run(status, id).changes > 0
   },
 }
 
