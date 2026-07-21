@@ -20,6 +20,7 @@ export type ReportPayload = {
   viewport: string
   userAgent: string
   context?: ReproBundle
+  projectId?: string // overlay project picker — routes the report to this project (else the ingest key's own)
 }
 
 export function buildReport(o: {
@@ -33,6 +34,7 @@ export function buildReport(o: {
   innerHeight: number
   userAgent: string
   context?: ReproBundle | null
+  projectId?: string | null
 }): ReportPayload {
   return {
     ingestKey: o.ingestKey,
@@ -44,5 +46,6 @@ export function buildReport(o: {
     viewport: `${o.innerWidth}x${o.innerHeight}`,
     userAgent: o.userAgent,
     context: o.context ?? undefined,
+    projectId: o.projectId || undefined,
   }
 }

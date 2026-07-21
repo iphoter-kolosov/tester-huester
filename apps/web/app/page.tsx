@@ -3,8 +3,8 @@ import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import type { ReproBundle } from '@th/core'
 import { repo, type Report } from '@th/db'
-import StatusSelect from '@/components/StatusSelect'
-import ProjectSelect from '@/components/ProjectSelect'
+import Filters from '@/components/Filters'
+import RowControls from '@/components/RowControls'
 import { isAuthed } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
@@ -28,7 +28,6 @@ async function regenerateKey(formData: FormData) {
   revalidatePath('/')
 }
 
-// Compact "console N · net M · steps K · X err" badges from the repro bundle, if any.
 function contextBadges(context: unknown) {
   const c = context as ReproBundle | null
   if (!c) return null
@@ -43,21 +42,18 @@ function contextBadges(context: unknown) {
 
 function ago(ms: number): string {
   const mins = Math.floor((Date.now() - ms) / 60000)
-  if (mins < 1) return 'now'
-  if (mins < 60) return `${mins}m ago`
+  if (mins < 1) return 'сейчас'
+  if (mins < 60) return `${mins} мин`
   const h = Math.floor(mins / 60)
-  if (h < 24) return `${h}h ago`
-  return `${Math.floor(h / 24)}d ago`
+  if (h < 24) return `${h} ч`
+  return `${Math.floor(h / 24)} дн`
 }
 
 const TYPE_LABEL: Record<string, string> = { feature: 'Фича', bug: 'Баг', fix: 'Правка', text: 'Текст' }
-const TYPE_ORDER = ['feature', 'bug', 'fix', 'text']
-const SEV_LABEL: Record<string, string> = { low: 'low', med: 'med', high: 'high', crit: 'crit' }
-const STATUS_ORDER = ['new', 'triaged', 'fixed', 'wontfix']
-const NO_SITE = '(no site)'
+const NO_SITE = '(без сайта)'
 
-// The site a note belongs to = the host of the page it was captured on. This is the real "с какого сайта"
-// signal — independent of which project (ingest key) it was sent under.
+// The site a note belongs to = the host of the page it was captured on — the real "с какого сайта" signal,
+// independent of which project (ingest key) it was sent under.
 function host(pageUrl: string | null): string {
   if (!pageUrl) return NO_SITE
   try {
@@ -70,21 +66,24 @@ function host(pageUrl: string | null): string {
 export default async function Home({
   searchParams,
 }: {
-  searchParams: Promise<{ site?: string; type?: string; status?: string; sort?: string; project?: string }>
+  searchParams: Promise<{ site?: string; type?: string; status?: string; sort?: string; project?: string; arch?: string }>
 }) {
   if (!(await isAuthed())) redirect('/login')
   const sp = await searchParams
+  const arch = sp.arch === '1'
   const f = { site: sp.site || '', type: sp.type || '', status: sp.status || '', project: sp.project || '', sort: sp.sort === 'old' ? 'old' : 'new' }
 
   const projects = repo.listProjects()
   const projName = new Map(projects.map((p) => [p.id, p.name] as const))
-  const projOpts = projects.map((p) => ({ id: p.id, name: p.name }))
-  const all = repo.listReports({ limit: 1000 }) // newest-first from the DB
+  const projOpts = projects.map((p) => ({ value: p.id, label: p.name }))
+  const all = repo.listReports({ archived: arch, limit: 1000 }) // newest-first from the DB
+  const archivedCount = repo.listReports({ archived: true, limit: 1000 }).length
 
-  // Every distinct site seen in the data — powers the Site filter.
+  // Every distinct site in the current view — powers the Site filter.
   const siteCounts = new Map<string, number>()
   for (const r of all) siteCounts.set(host(r.pageUrl), (siteCounts.get(host(r.pageUrl)) ?? 0) + 1)
   const siteList = [...siteCounts.keys()].sort((a, b) => (siteCounts.get(b)! - siteCounts.get(a)!) || a.localeCompare(b))
+  const siteOpts = siteList.map((s) => ({ value: s, label: `${s} (${siteCounts.get(s)})` }))
 
   const matches = (r: Report) =>
     (!f.site || host(r.pageUrl) === f.site) &&
@@ -94,8 +93,7 @@ export default async function Home({
   const shown = all.filter(matches)
   const hasFilter = !!(f.site || f.type || f.status || f.project)
 
-  // Group the visible notes BY SITE. Order notes within a group by the chosen sort; order the groups by their
-  // most-recent note so the freshest site floats to the top.
+  // Group visible notes BY SITE; order notes within a group by the chosen sort; float the freshest site up.
   const bySite = new Map<string, Report[]>()
   for (const r of shown) {
     const k = host(r.pageUrl)
@@ -113,10 +111,12 @@ export default async function Home({
   return (
     <main className="wrap">
       <div className="h">
-        <span className="h1">🐞 Reports</span>
+        <span className="h1">
+          <span className="hdot" /> QA cabinet
+        </span>
         <span className="c">
           {shown.length}
-          {hasFilter ? ` / ${all.length}` : ''} notes · {siteList.length} sites
+          {hasFilter ? ` / ${all.length}` : ''} {arch ? 'в архиве' : 'тикетов'} · {siteList.length} сайтов
         </span>
       </div>
 
@@ -145,52 +145,21 @@ export default async function Home({
         </form>
       </div>
 
-      <form className="filters" action="/" method="get">
-        <select name="site" defaultValue={f.site} className="fsel">
-          <option value="">All sites</option>
-          {siteList.map((s) => (
-            <option key={s} value={s}>{s} ({siteCounts.get(s)})</option>
-          ))}
-        </select>
-        <select name="type" defaultValue={f.type} className="fsel">
-          <option value="">Any type</option>
-          {TYPE_ORDER.map((t) => (
-            <option key={t} value={t}>{TYPE_LABEL[t]}</option>
-          ))}
-        </select>
-        <select name="status" defaultValue={f.status} className="fsel">
-          <option value="">Any status</option>
-          {STATUS_ORDER.map((s) => (
-            <option key={s} value={s}>{s}</option>
-          ))}
-        </select>
-        {projects.length > 1 && (
-          <select name="project" defaultValue={f.project} className="fsel" title="Show only one project — what that agent's key exposes">
-            <option value="">Any project</option>
-            {projOpts.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
-        )}
-        <select name="sort" defaultValue={f.sort} className="fsel">
-          <option value="new">Newest first</option>
-          <option value="old">Oldest first</option>
-        </select>
-        <button type="submit" className="fbtn">Filter</button>
-        {hasFilter || f.sort === 'old' ? <Link href="/" className="freset">Reset</Link> : null}
-      </form>
+      <Filters sites={siteOpts} projects={projOpts} archivedCount={archivedCount} />
 
       {all.length === 0 && (
-        <div className="empty">No notes yet. Capture from the extension (Ctrl+Shift+Y) or POST to <code>/api/ingest</code>.</div>
+        <div className="empty">
+          {arch ? 'Архив пуст.' : <>Пока нет тикетов. Снимайте из расширения (Ctrl+Shift+Y) или POST в <code>/api/ingest</code>.</>}
+        </div>
       )}
-      {all.length > 0 && shown.length === 0 && <div className="empty">No notes match the filter.</div>}
+      {all.length > 0 && shown.length === 0 && <div className="empty">Ничего не подходит под фильтр.</div>}
 
       {groups.map(({ site, rows }) => (
         <section className="proj" key={site}>
           <div className="projhead">
             <div className="projmeta">
               <span className="projname">{site}</span>
-              <span className="projcounts">{rows.length} {rows.length === 1 ? 'note' : 'notes'}</span>
+              <span className="projcounts">{rows.length}</span>
             </div>
           </div>
 
@@ -198,19 +167,17 @@ export default async function Home({
             const badges = contextBadges(r.context) ?? []
             if (r.replayUrl) badges.push({ t: '▶ replay' })
             return (
-              <div className="row" key={r.id}>
-                {r.screenshotUrl ? <img className="thumb" src={r.screenshotUrl} alt="" /> : <span className="noimg">📷</span>}
+              <div className={'row' + (r.archived ? ' row-arch' : '')} key={r.id}>
+                <Link className="rowthumb" href={`/r/${r.id}`}>
+                  {r.screenshotUrl ? <img className="thumb" src={r.screenshotUrl} alt="" /> : <span className="noimg">📷</span>}
+                </Link>
                 <div className="mid">
-                  <div className="tags">
-                    <span className={'tp tp-' + r.type}>{TYPE_LABEL[r.type] ?? r.type}</span>
-                    {r.severity ? <span className={'sv sv-' + r.severity}>{SEV_LABEL[r.severity] ?? r.severity}</span> : null}
-                  </div>
-                  <div className={'note' + (r.note ? '' : ' empty2')}>{r.note || 'no note'}</div>
+                  <Link className={'note' + (r.note ? '' : ' empty2')} href={`/r/${r.id}`}>{r.note || 'без заметки'}</Link>
                   <div className="meta">
+                    <span className="proj-tag">{projName.get(r.projectId) ?? 'project'}</span>
                     <span>{ago(r.createdAt)}</span>
                     {r.pageUrl && <a href={r.pageUrl} target="_blank" rel="noreferrer">{r.pageUrl}</a>}
                     {r.viewport && <span>{r.viewport}</span>}
-                    {r.reporter && <span>· {r.reporter}</span>}
                   </div>
                   {badges.length ? (
                     <div className="badges">
@@ -220,11 +187,15 @@ export default async function Home({
                     </div>
                   ) : null}
                 </div>
-                <div className="right">
-                  <StatusSelect id={r.id} value={r.status} />
-                  <ProjectSelect id={r.id} value={r.projectId} projects={projOpts} />
-                  <Link className="open" href={`/r/${r.id}`}>open →</Link>
-                </div>
+                <RowControls
+                  id={r.id}
+                  type={r.type}
+                  severity={r.severity}
+                  status={r.status}
+                  projectId={r.projectId}
+                  projects={projOpts}
+                  archived={r.archived}
+                />
               </div>
             )
           })}

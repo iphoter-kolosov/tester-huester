@@ -81,5 +81,15 @@ export default defineBackground(() => {
         .catch((e) => sendResponse({ ok: false, error: String(e) }))
       return true // keep the message channel open for the async response
     }
+    if (msg?.type === 'TH_PROJECTS') {
+      // The overlay's project picker: list the account's projects. Fetched from the background so it isn't
+      // subject to the page's CSP (same reason as TH_SEND).
+      const url = `${msg.collectorUrl}/api/projects?ingestKey=${encodeURIComponent(msg.ingestKey || '')}`
+      fetch(url, { headers: { Accept: 'application/json' } })
+        .then((r) => r.json())
+        .then((j) => sendResponse(j))
+        .catch((e) => sendResponse({ ok: false, error: String(e) }))
+      return true
+    }
   })
 })

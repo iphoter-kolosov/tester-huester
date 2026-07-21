@@ -55,6 +55,9 @@ function db(): DatabaseSync {
   // `type` gets a NOT NULL DEFAULT so old rows read back as 'bug'; `severity` stays nullable (truly optional).
   if (!columnExists(c, 'reports', 'type')) c.exec("ALTER TABLE reports ADD COLUMN type text NOT NULL DEFAULT 'bug'")
   if (!columnExists(c, 'reports', 'severity')) c.exec('ALTER TABLE reports ADD COLUMN severity text')
+  // Archive: a two-stage safety for removal — archive first (reversible, hidden from the active board and from
+  // agents), then hard-delete only from the archive.
+  if (!columnExists(c, 'reports', 'archived')) c.exec('ALTER TABLE reports ADD COLUMN archived integer NOT NULL DEFAULT 0')
   // Per-project read key: read-only, single-project scope for an agent (REST/MCP) — no dashboard cookie, no
   // write-capable ingest key. Added nullable, then backfilled for pre-existing projects.
   if (!columnExists(c, 'projects', 'read_key')) c.exec('ALTER TABLE projects ADD COLUMN read_key text')
@@ -87,7 +90,7 @@ export type Severity = 'low' | 'med' | 'high' | 'crit'
 export type Report = {
   id: string; projectId: string; note: string; screenshotUrl: string | null; pageUrl: string | null
   viewport: string | null; userAgent: string | null; reporter: string | null; status: string; createdAt: number
-  context: unknown | null; replayUrl: string | null; type: ReportType; severity: Severity | null
+  context: unknown | null; replayUrl: string | null; type: ReportType; severity: Severity | null; archived: boolean
 }
 
 const toProject = (r: any): Project => ({ id: r.id, name: r.name, ingestKey: r.ingest_key, readKey: r.read_key ?? '', createdAt: r.created_at })
@@ -96,6 +99,7 @@ const toReport = (r: any): Report => ({
   viewport: r.viewport, userAgent: r.user_agent, reporter: r.reporter, status: r.status, createdAt: r.created_at,
   context: parseJson(r.context), replayUrl: r.replay_url ?? null,
   type: (r.type ?? 'bug') as ReportType, severity: (r.severity ?? null) as Severity | null,
+  archived: !!r.archived,
 })
 
 function parseJson(s: unknown): unknown | null {
@@ -170,14 +174,16 @@ export const repo = {
     return this.getReport(id)!
   },
   // Backwards compatible: the old call site passed only `status`. New filters (projectId, type) are additive
-  // and AND-combined; any subset may be supplied.
-  listReports(opts: { projectId?: string; type?: string; status?: string; limit?: number } = {}): Report[] {
-    const lim = Math.min(opts.limit ?? 200, 500)
+  // and AND-combined; any subset may be supplied. `archived` defaults to 0 (active only) so agents and the
+  // main board never see archived tickets; pass archived:true for the archive view, or 'all' for everything.
+  listReports(opts: { projectId?: string; type?: string; status?: string; archived?: boolean | 'all'; limit?: number } = {}): Report[] {
+    const lim = Math.min(opts.limit ?? 200, 1000)
     const where: string[] = []
     const args: string[] = []
     if (opts.projectId) { where.push('project_id = ?'); args.push(opts.projectId) }
     if (opts.type) { where.push('type = ?'); args.push(opts.type) }
     if (opts.status) { where.push('status = ?'); args.push(opts.status) }
+    if (opts.archived === 'all') { /* both */ } else if (opts.archived === true) { where.push('archived = 1') } else { where.push('archived = 0') }
     const clause = where.length ? ` WHERE ${where.join(' AND ')}` : ''
     const rows = db().prepare(`SELECT * FROM reports${clause} ORDER BY created_at DESC LIMIT ?`).all(...args, lim)
     return rows.map(toReport)
@@ -188,6 +194,24 @@ export const repo = {
   },
   setStatus(id: string, status: string): boolean {
     return db().prepare('UPDATE reports SET status = ? WHERE id = ?').run(status, id).changes > 0
+  },
+  setArchived(id: string, archived: boolean): boolean {
+    return db().prepare('UPDATE reports SET archived = ? WHERE id = ?').run(archived ? 1 : 0, id).changes > 0
+  },
+  // Hard delete — the UI only offers this from the archive (delete = irreversible).
+  deleteReport(id: string): boolean {
+    return db().prepare('DELETE FROM reports WHERE id = ?').run(id).changes > 0
+  },
+  // Edit a report's properties after creation. Only the supplied fields are written.
+  updateReport(id: string, fields: { note?: string; type?: ReportType; severity?: Severity | null }): boolean {
+    const sets: string[] = []
+    const args: (string | null)[] = []
+    if (fields.note !== undefined) { sets.push('note = ?'); args.push(fields.note) }
+    if (fields.type !== undefined) { sets.push('type = ?'); args.push(fields.type) }
+    if (fields.severity !== undefined) { sets.push('severity = ?'); args.push(fields.severity) }
+    if (!sets.length) return false
+    args.push(id)
+    return db().prepare(`UPDATE reports SET ${sets.join(', ')} WHERE id = ?`).run(...args).changes > 0
   },
 }
 

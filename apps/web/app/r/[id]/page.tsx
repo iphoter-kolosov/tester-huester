@@ -2,7 +2,8 @@ import Link from 'next/link'
 import { notFound, redirect } from 'next/navigation'
 import type { ReproBundle } from '@th/core'
 import { repo } from '@th/db'
-import StatusSelect from '@/components/StatusSelect'
+import RowControls from '@/components/RowControls'
+import EditableNote from '@/components/EditableNote'
 import ReproContext from '@/components/ReproContext'
 import ReplayPlayer from '@/components/ReplayPlayer'
 import { isAuthed } from '@/lib/auth'
@@ -14,15 +15,22 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
   const { id } = await params
   const r = repo.getReport(id)
   if (!r) notFound()
+  const projOpts = repo.listProjects().map((p) => ({ value: p.id, label: p.name }))
   return (
     <main className="wrap">
-      <Link className="back" href="/">← all reports</Link>
+      <Link className="back" href="/">← все тикеты</Link>
       <div className="h" style={{ marginTop: 10 }}>
-        <span className="h1">Report</span>
-        <StatusSelect id={r.id} value={r.status} />
+        <span className="h1">Тикет{r.archived ? <span className="archbadge">в архиве</span> : null}</span>
       </div>
+
+      <div className="dctl">
+        <RowControls id={r.id} type={r.type} severity={r.severity} status={r.status} projectId={r.projectId} projects={projOpts} archived={r.archived} />
+      </div>
+
       {r.screenshotUrl ? <img className="dshot" src={r.screenshotUrl} alt="" /> : null}
-      {r.note ? <div className="dnote">{r.note}</div> : null}
+
+      <EditableNote id={r.id} value={r.note} />
+
       <div className="dmeta">
         <span className="k">Page</span>
         <span>{r.pageUrl ? <a href={r.pageUrl} target="_blank" rel="noreferrer" style={{ color: 'var(--accent)' }}>{r.pageUrl}</a> : '—'}</span>

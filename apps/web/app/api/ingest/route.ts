@@ -59,6 +59,13 @@ export async function POST(req: Request) {
   if (!key) return NextResponse.json({ ok: false, error: 'no_key' }, { status: 401, headers: CORS })
   const proj = repo.getProjectByKey(key)
   if (!proj) return NextResponse.json({ ok: false, error: 'bad_key' }, { status: 401, headers: CORS })
+  // Optional routing override: the overlay's project picker sends `projectId`. A valid ingest key may deposit
+  // into any of the account's projects (single-tenant); an unknown id falls back to the key's own project.
+  let targetProjectId = proj.id
+  if (typeof body.projectId === 'string' && body.projectId) {
+    const target = repo.getProjectById(body.projectId)
+    if (target) targetProjectId = target.id
+  }
 
   let screenshotUrl: string | null = null
   const shot = body.screenshot
@@ -87,7 +94,7 @@ export async function POST(req: Request) {
   }
 
   const row = repo.createReport({
-    projectId: proj.id,
+    projectId: targetProjectId,
     note,
     screenshotUrl,
     pageUrl: clip(body.pageUrl, 2000),

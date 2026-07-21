@@ -83,6 +83,10 @@ const CSS = `
 .seg.sev button.on[data-v="med"] { background: #a16207; }
 .seg.sev button.on[data-v="high"] { background: #c2410c; }
 .seg.sev button.on[data-v="crit"] { background: #b91c1c; }
+.psel { height: 30px; padding: 0 9px; border: 1px solid #223049; background: #0f1626; color: #e6edf7; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; max-width: 190px; }
+.psel:hover { border-color: #38bdf8; }
+.khint { margin-left: auto; font-size: 11px; font-weight: 700; color: #8ea0bd; }
+.khint b { color: #38bdf8; font-weight: 800; }
 .note { width: 100%; min-height: 60px; padding: 10px 12px; background: #0f1626; border: 1px solid #223049; border-radius: 10px; color: #e6edf7; font: inherit; resize: vertical; outline: none; }
 .foot { display: flex; align-items: center; gap: 10px; }
 .msg { color: #8ea0bd; font-size: 12.5px; }
@@ -119,19 +123,19 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
         <div class="tools">
           ${DEFAULT_COLORS.map((c, i) => `<button class="sw${i === 0 ? ' on' : ''}" data-c="${c}" style="background:${c}"></button>`).join('')}
           <span class="vsep"></span>
-          <button class="tb tool on" data-tool="draw" title="Карандаш">✏</button>
-          <button class="tb tool" data-tool="arrow" title="Стрелка">↗</button>
-          <button class="tb tool" data-tool="rect" title="Прямоугольник">▭</button>
-          <button class="tb tool" data-tool="text" title="Текст">T</button>
-          <button class="tb tool" data-tool="eraser" title="Ластик">⌫</button>
+          <button class="tb tool on" data-tool="draw" title="Карандаш (P)">✏</button>
+          <button class="tb tool" data-tool="arrow" title="Стрелка (A)">↗</button>
+          <button class="tb tool" data-tool="rect" title="Прямоугольник (R)">▭</button>
+          <button class="tb tool" data-tool="text" title="Текст (T)">T</button>
+          <button class="tb tool" data-tool="eraser" title="Ластик (E)">⌫</button>
           <span class="vsep"></span>
-          ${WIDTHS.map((w) => `<button class="tb width${w.value === 'med' ? ' on' : ''}" data-w="${w.value}" title="${w.label}">${w.value === 'thin' ? '│' : w.value === 'med' ? '┃' : '█'}</button>`).join('')}
+          ${WIDTHS.map((w) => `<button class="tb width${w.value === 'med' ? ' on' : ''}" data-w="${w.value}" title="${w.label} (${w.value === 'thin' ? '1' : w.value === 'med' ? '2' : '3'})">${w.value === 'thin' ? '│' : w.value === 'med' ? '┃' : '█'}</button>`).join('')}
           <span class="vsep"></span>
-          <button class="tb tool" data-tool="crop" title="Кадрировать">✂</button>
+          <button class="tb tool" data-tool="crop" title="Кадрировать (C)">✂</button>
           <span class="sep"></span>
           <button class="tb" data-act="undo" disabled title="Отменить (Ctrl+Z)">↩ Undo</button>
-          <button class="tb" data-act="redo" disabled title="Повторить (Ctrl+Shift+Z)">↪ Redo</button>
-          <button class="tb" data-act="clear" disabled>🗑 Очистить</button>
+          <button class="tb" data-act="redo" disabled title="Повторить (Ctrl+Y / Ctrl+Shift+Z)">↪ Redo</button>
+          <button class="tb" data-act="clear" disabled title="Очистить (Shift+Del)">🗑 Очистить</button>
         </div>
         <div class="meta">
           <label>Тип</label>
@@ -142,6 +146,9 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
           <div class="seg sev">
             ${SEVERITIES.map((s) => `<button data-v="${s.value}"${s.value === 'med' ? ' class="on"' : ''}>${s.label}</button>`).join('')}
           </div>
+          <label>Проект</label>
+          <select class="psel"><option value="">по умолчанию</option></select>
+          <span class="khint"><b>Ctrl+Enter</b> отправить · <b>Esc</b> закрыть</span>
         </div>
         <textarea class="note" placeholder="What's wrong here?"></textarea>
         <div class="foot">
@@ -177,22 +184,43 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
   const tin = q<HTMLElement>('.tin')
   const tinInput = q<HTMLInputElement>('.tin input')
   const tmark = q<HTMLElement>('.tmark')
+  const psel = q<HTMLSelectElement>('.psel')
 
   // Form state (shared with track A via the exact field names note/type/severity).
   let type: ReportType = 'bug'
   let severity: Severity = 'med'
+  let projectId: string | null = null // chosen in the project picker; null → route by the ingest key
   let pendingText: { x: number; y: number } | null = null
 
   const close = () => { document.removeEventListener('keydown', onKey, true); host.remove(); onClose() }
 
-  // Ctrl/Cmd+Z = undo, Ctrl/Cmd+Shift+Z = redo — over the unified annotator stack (drawings AND crop). Skip
-  // while typing in the note or the text-input so native text-undo still works there.
+  // Standard editor hotkeys across the whole overlay. Single-key shortcuts are skipped while typing in a field
+  // so text entry is unaffected; the undo/redo/crop stack is the annotator's unified one (drawings AND crop).
+  const TOOL_KEYS: Record<string, Tool> = { p: 'draw', a: 'arrow', r: 'rect', t: 'text', e: 'eraser', c: 'crop' }
+  const WIDTH_KEYS: Record<string, Width> = { '1': 'thin', '2': 'med', '3': 'thick' }
   function onKey(e: KeyboardEvent) {
-    if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== 'z') return
     const ae = root.activeElement as HTMLElement | null
-    if (ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')) return
-    e.preventDefault()
-    if (e.shiftKey) ann.redo(); else ann.undo()
+    const typing = !!ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')
+    const mod = e.ctrlKey || e.metaKey
+    const k = e.key.toLowerCase()
+
+    if (mod && e.key === 'Enter') { e.preventDefault(); sendBtn.click(); return } // send from anywhere
+    if (mod && k === 'z') { if (typing) return; e.preventDefault(); if (e.shiftKey) ann.redo(); else ann.undo(); return }
+    if (mod && k === 'y') { if (typing) return; e.preventDefault(); ann.redo(); return } // Ctrl+Y = redo
+    if (mod) return // leave other Ctrl/Cmd combos to the browser
+
+    if (e.key === 'Escape') { if (typing) return; e.preventDefault(); close(); return }
+    if (typing) return
+
+    if (e.shiftKey && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); ann.clearAll(); return }
+    const tool = TOOL_KEYS[k]
+    if (tool) { e.preventDefault(); ann.setTool(tool); refresh(); return }
+    const w = WIDTH_KEYS[k]
+    if (w) {
+      e.preventDefault()
+      ann.setWidth(w)
+      root.querySelectorAll('.tb.width').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.w === w))
+    }
   }
   document.addEventListener('keydown', onKey, true)
 
@@ -304,6 +332,19 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
   q<HTMLElement>('.x').addEventListener('click', close)
   q<HTMLElement>('.cancel').addEventListener('click', close)
 
+  // Populate the project picker from the account's projects (fetched via background → collector), preselecting
+  // the ingest key's own project. Choosing another routes the report there on send.
+  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
+  getConfig()
+    .then((cfg) => chrome.runtime.sendMessage({ type: 'TH_PROJECTS', collectorUrl: cfg.collectorUrl, ingestKey: cfg.ingestKey }))
+    .then((res: { ok?: boolean; projects?: { id: string; name: string }[]; defaultId?: string }) => {
+      if (!res?.ok || !Array.isArray(res.projects) || !res.projects.length) return
+      projectId = res.defaultId || res.projects[0]!.id
+      psel.innerHTML = res.projects.map((p) => `<option value="${esc(p.id)}"${p.id === projectId ? ' selected' : ''}>${esc(p.name)}</option>`).join('')
+    })
+    .catch(() => {})
+  psel.addEventListener('change', () => { projectId = psel.value || null })
+
   function setMsg(t: string, cls = '') { msg.textContent = t; msg.className = 'msg ' + cls }
 
   sendBtn.addEventListener('click', async () => {
@@ -321,6 +362,7 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
       innerHeight: window.innerHeight,
       userAgent: navigator.userAgent,
       context,
+      projectId,
     })
     if (!payload.note && !payload.screenshot) { setMsg('Add a note or a screenshot', 'err'); return }
     sendBtn.disabled = true
