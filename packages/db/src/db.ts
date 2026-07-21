@@ -153,6 +153,14 @@ export const repo = {
   moveReport(id: string, projectId: string): boolean {
     return db().prepare('UPDATE reports SET project_id = ? WHERE id = ?').run(projectId, id).changes > 0
   },
+  // Rotate a project's agent read key: mint a fresh token and return it. The old key stops working immediately
+  // (any agent using it must be updated) — use it when a key leaks.
+  regenerateReadKey(projectId: string): string {
+    const key = newReadKey()
+    const changed = db().prepare('UPDATE projects SET read_key = ? WHERE id = ?').run(key, projectId).changes
+    if (!changed) throw new Error(`regenerateReadKey: no project ${projectId}`)
+    return key
+  },
   createReport(x: NewReport): Report {
     const id = crypto.randomUUID()
     db().prepare(

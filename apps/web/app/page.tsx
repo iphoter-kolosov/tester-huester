@@ -19,6 +19,15 @@ async function createProject(formData: FormData) {
   revalidatePath('/')
 }
 
+// Rotate a project's agent read key (human, dashboard-only). Use when a key leaks — the old one dies instantly.
+async function regenerateKey(formData: FormData) {
+  'use server'
+  if (!(await isAuthed())) return
+  const id = String(formData.get('projectId') || '')
+  if (id) repo.regenerateReadKey(id)
+  revalidatePath('/')
+}
+
 // Compact "console N · net M · steps K · X err" badges from the repro bundle, if any.
 function contextBadges(context: unknown) {
   const c = context as ReproBundle | null
@@ -119,6 +128,10 @@ export default async function Home({
             <span className="keyrow" title="Give this to a dev agent: scoped read + status writes (MCP TH_PROJECT_KEY / REST ?projectKey=)">
               <span className="keyk">agent</span>
               <code>{p.readKey || '—'}</code>
+              <form action={regenerateKey} className="keyref">
+                <input type="hidden" name="projectId" value={p.id} />
+                <button type="submit" className="keyre" title="Regenerate this key — the old one stops working immediately">↻</button>
+              </form>
             </span>
             <span className="keyrow" title="Point the extension's ingest key here to route new captures into this project">
               <span className="keyk">ingest</span>
