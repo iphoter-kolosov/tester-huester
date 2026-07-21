@@ -194,28 +194,30 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
 
   const close = () => { document.removeEventListener('keydown', onKey, true); host.remove(); onClose() }
 
-  // Standard editor hotkeys across the whole overlay. Single-key shortcuts are skipped while typing in a field
-  // so text entry is unaffected; the undo/redo/crop stack is the annotator's unified one (drawings AND crop).
-  const TOOL_KEYS: Record<string, Tool> = { p: 'draw', a: 'arrow', r: 'rect', t: 'text', e: 'eraser', c: 'crop' }
-  const WIDTH_KEYS: Record<string, Width> = { '1': 'thin', '2': 'med', '3': 'thick' }
+  // Standard editor hotkeys across the whole overlay. Keyed off e.code (PHYSICAL key: 'KeyP', 'KeyZ', 'Digit1'),
+  // NOT e.key — so they work under any keyboard layout (RU/EN/HU) and on every OS, where e.key would return a
+  // layout-dependent character (physical P → 'з' on the Russian layout) and the mapping would miss. Single-key
+  // shortcuts are skipped while typing in a field; the undo/redo stack is the annotator's unified one (draw+crop).
+  const TOOL_CODES: Record<string, Tool> = { KeyP: 'draw', KeyA: 'arrow', KeyR: 'rect', KeyT: 'text', KeyE: 'eraser', KeyC: 'crop' }
+  const WIDTH_CODES: Record<string, Width> = { Digit1: 'thin', Digit2: 'med', Digit3: 'thick', Numpad1: 'thin', Numpad2: 'med', Numpad3: 'thick' }
   function onKey(e: KeyboardEvent) {
     const ae = root.activeElement as HTMLElement | null
     const typing = !!ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')
     const mod = e.ctrlKey || e.metaKey
-    const k = e.key.toLowerCase()
+    const code = e.code
 
-    if (mod && e.key === 'Enter') { e.preventDefault(); sendBtn.click(); return } // send from anywhere
-    if (mod && k === 'z') { if (typing) return; e.preventDefault(); if (e.shiftKey) ann.redo(); else ann.undo(); return }
-    if (mod && k === 'y') { if (typing) return; e.preventDefault(); ann.redo(); return } // Ctrl+Y = redo
+    if (mod && (code === 'Enter' || code === 'NumpadEnter')) { e.preventDefault(); sendBtn.click(); return } // send
+    if (mod && code === 'KeyZ') { if (typing) return; e.preventDefault(); if (e.shiftKey) ann.redo(); else ann.undo(); return }
+    if (mod && code === 'KeyY') { if (typing) return; e.preventDefault(); ann.redo(); return } // Ctrl+Y = redo
     if (mod) return // leave other Ctrl/Cmd combos to the browser
 
-    if (e.key === 'Escape') { if (typing) return; e.preventDefault(); close(); return }
+    if (code === 'Escape') { if (typing) return; e.preventDefault(); close(); return }
     if (typing) return
 
-    if (e.shiftKey && (e.key === 'Delete' || e.key === 'Backspace')) { e.preventDefault(); ann.clearAll(); return }
-    const tool = TOOL_KEYS[k]
+    if (e.shiftKey && (code === 'Delete' || code === 'Backspace')) { e.preventDefault(); ann.clearAll(); return }
+    const tool = TOOL_CODES[code]
     if (tool) { e.preventDefault(); ann.setTool(tool); refresh(); return }
-    const w = WIDTH_KEYS[k]
+    const w = WIDTH_CODES[code]
     if (w) {
       e.preventDefault()
       ann.setWidth(w)
