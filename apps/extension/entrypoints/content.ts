@@ -11,6 +11,13 @@ export default defineContentScript({
   matches: ['<all_urls>'],
   runAt: 'document_idle',
   main() {
+    // Idempotent load guard: the declarative injection and the background warm-up / on-demand injection can
+    // both target the same frame (they share this isolated-world global). Run the setup exactly once so we
+    // never end up with two rrweb recorders or two overlay listeners.
+    const g = globalThis as unknown as { __thLoaded?: boolean }
+    if (g.__thLoaded) return
+    g.__thLoaded = true
+
     // Start buffering the last ~2 min of DOM replay immediately (opt-out via popup). Runs in the isolated
     // world but observes the shared DOM, which is all rrweb needs.
     getConfig().then((c) => { if (c.recordReplay) startReplay() }).catch(() => {})

@@ -35,6 +35,32 @@ export default defineBackground(() => {
     await openOverlay(id, shot)
   }
 
+  // After an install / update / browser start, the declarative content script is NOT retro-injected into
+  // already-open tabs — so replay recording would only begin once each tab is navigated or reloaded, which is
+  // exactly why a capture right after reloading the extension shows an empty replay. Warm every open http(s)
+  // tab up by injecting the content script now, so rrweb starts buffering immediately everywhere. The content
+  // script's own load guard makes a redundant injection a no-op.
+  async function warmUpAllTabs() {
+    let tabs: chrome.tabs.Tab[]
+    try {
+      tabs = await chrome.tabs.query({ url: ['http://*/*', 'https://*/*'] })
+    } catch {
+      return
+    }
+    await Promise.all(
+      tabs.map(async (t) => {
+        if (t.id == null) return
+        try {
+          await chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['content-scripts/content.js'] })
+        } catch {
+          // restricted tabs (Web Store, chrome://, PDF viewer, …) can't be injected — skip silently
+        }
+      }),
+    )
+  }
+  chrome.runtime.onInstalled.addListener(() => void warmUpAllTabs())
+  chrome.runtime.onStartup.addListener(() => void warmUpAllTabs())
+
   chrome.commands.onCommand.addListener((cmd) => {
     if (cmd === 'capture') capture()
   })
