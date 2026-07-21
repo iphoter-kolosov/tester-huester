@@ -12,7 +12,7 @@ export default defineConfig({
   manifest: {
     name: 'tester-huester',
     description: 'Capture a QA note (screenshot + drawing) on any site → your dashboard.',
-    permissions: ['activeTab', 'tabs', 'storage'],
+    permissions: ['activeTab', 'tabs', 'storage', 'scripting'],
     host_permissions: ['<all_urls>'],
     commands: {
       capture: {

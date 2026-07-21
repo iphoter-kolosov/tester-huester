@@ -2,20 +2,37 @@
 // (2) forward the finished report to the collector from the EXTENSION context — background fetches are not
 // subject to the page's CSP, so the POST works on any site.
 export default defineBackground(() => {
-  async function capture(tabId?: number) {
-    let shot: string
+  // Send TH_OPEN to the tab's content script. If it isn't there (the tab was opened BEFORE the extension
+  // loaded, so the declarative content script never ran), inject it on demand and retry — capture then works
+  // on any already-open tab without a manual page reload.
+  async function openOverlay(tabId: number, shot: string) {
     try {
-      shot = await chrome.tabs.captureVisibleTab({ format: 'png' })
-    } catch (e) {
-      console.warn('[th] capture failed:', e)
-      return
+      await chrome.tabs.sendMessage(tabId, { type: 'TH_OPEN', shot })
+    } catch {
+      try {
+        await chrome.scripting.executeScript({ target: { tabId }, files: ['content-scripts/content.js'] })
+        await chrome.tabs.sendMessage(tabId, { type: 'TH_OPEN', shot })
+      } catch (e) {
+        console.warn('[th] could not open the overlay on this tab (a restricted page like the New Tab, the Web Store, or brave://* cannot be captured):', e)
+      }
     }
+  }
+
+  async function capture(tabId?: number) {
     let id = tabId
     if (id == null) {
       const [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
       id = tab?.id
     }
-    if (id != null) chrome.tabs.sendMessage(id, { type: 'TH_OPEN', shot }).catch(() => {})
+    if (id == null) return
+    let shot: string
+    try {
+      shot = await chrome.tabs.captureVisibleTab({ format: 'png' })
+    } catch (e) {
+      console.warn('[th] screenshot failed (restricted page?):', e)
+      return
+    }
+    await openOverlay(id, shot)
   }
 
   chrome.commands.onCommand.addListener((cmd) => {
