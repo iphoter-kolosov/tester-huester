@@ -1,0 +1,13 @@
+{
+  "//": "REMOTE shim — use this from a project chat on YOUR machine to read that project's bugs from the DEPLOYED tester-huester over HTTPS (no DB-file access needed). Copy into the project's .mcp.json (or merge into mcpServers). Replace the tester-huester path, the collector URL, and the read_key (thr_…, shown per-site on the dashboard).",
+  "mcpServers": {
+    "tester-huester": {
+      "command": "npx",
+      "args": ["-y", "tsx", "/ABSOLUTE/PATH/TO/tester-huester/apps/mcp/src/remote.ts"],
+      "env": {
+        "TH_COLLECTOR": "https://qa.ihor.work",
+        "TH_PROJECT_KEY": "thr_paste_the_projects_read_key_here"
+      }
+    }
+  }
+}

@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "tsx src/index.ts",
+    "remote": "tsx src/remote.ts",
     "smoke": "tsx src/smoke.ts"
   },
   "dependencies": {
