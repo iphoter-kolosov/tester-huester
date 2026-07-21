@@ -1,0 +1,28 @@
+# tester-huester — production compose for the web service.
+# Bound to 127.0.0.1 only: the outside world reaches it exclusively through the Cloudflare tunnel
+# (qa.ihor.work → localhost:4319). See DEPLOY.md.
+#
+# The MCP server is NOT here on purpose — it speaks stdio and is launched by the agent/chat that
+# consumes it (via .mcp.json), reading the same SQLite file. See DEPLOY.md, step D.
+
+services:
+  web:
+    build:
+      context: .
+    image: tester-huester-web
+    restart: unless-stopped
+    ports:
+      # host:container — only localhost, never 0.0.0.0. Tunnel does the public ingress.
+      - "127.0.0.1:4319:4319"
+    environment:
+      NODE_ENV: production
+      SQLITE_FILE: /data/th.db
+      UPLOAD_DIR: /data/uploads
+      # Required — compose refuses to start if DASH_PASSWORD is unset in the environment/.env.
+      DASH_PASSWORD: ${DASH_PASSWORD:?DASH_PASSWORD is required (set it in .env or the shell)}
+    volumes:
+      # Persist the SQLite DB + uploaded blobs across redeploys.
+      - th-data:/data
+
+volumes:
+  th-data:

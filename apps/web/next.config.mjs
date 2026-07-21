@@ -1,7 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // @th/db ships TS source — let Next compile it. Its native/wasm deps must NOT be bundled.
+  // @th/db and @th/core ship TS source — let Next compile it. The DB uses Node 24's built-in
+  // `node:sqlite`, which is a node: builtin and is always external, so no bundler config is needed.
   transpilePackages: ['@th/db', '@th/core'],
-  serverExternalPackages: ['better-sqlite3'],
 }
 export default nextConfig

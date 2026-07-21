@@ -1,8 +1,16 @@
 import { NextResponse } from 'next/server'
-import { repo } from '@th/db'
+import { repo, type ReportType, type Severity } from '@th/db'
 import { storage } from '@/lib/storage'
 
 export const runtime = 'nodejs'
+export const dynamic = 'force-dynamic'
+
+// Note taxonomy contract (shared with the extension payload). Unknown/absent values fall back to defaults so
+// older extension builds that don't send these fields keep working.
+const TYPES: ReportType[] = ['feature', 'bug', 'fix', 'text']
+const SEVERITIES: Severity[] = ['low', 'med', 'high', 'crit']
+const asType = (v: unknown): ReportType => (typeof v === 'string' && (TYPES as string[]).includes(v) ? (v as ReportType) : 'bug')
+const asSeverity = (v: unknown): Severity => (typeof v === 'string' && (SEVERITIES as string[]).includes(v) ? (v as Severity) : 'med')
 
 // The extension posts from a content script running on ANY origin, so this endpoint is CORS-open and
 // answers the preflight. Auth is the project's ingest key, not the origin.
@@ -88,6 +96,8 @@ export async function POST(req: Request) {
     reporter: clip(body.reporter, 200),
     context: sanitizeContext(body.context),
     replayUrl,
+    type: asType(body.type),
+    severity: asSeverity(body.severity),
   })
 
   return NextResponse.json({ ok: true, id: row.id }, { headers: CORS })

@@ -1,5 +1,5 @@
-export { ImageAnnotator, DEFAULT_COLORS } from './annotator'
-export type { Point, Stroke, AnnotatorOptions } from './annotator'
+export { ImageAnnotator, DEFAULT_COLORS, DEFAULT_WIDTH } from './annotator'
+export type { Point, Width, Tool, Prim, Freehand, Arrow, RectPrim, TextPrim, Stroke, AnnotatorOptions } from './annotator'
 
 // Capture core — the "sensory + motor" layer. One capture, two consumers (human report + agent trace).
 export { Ring } from './capture/ring'

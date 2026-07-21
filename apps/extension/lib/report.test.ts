@@ -11,6 +11,23 @@ assert.equal(p.viewport, '1440x900')
 assert.equal(p.ingestKey, 'th_demo_key_0001')
 assert.equal(p.screenshot, 'data:image/png;base64,AAA')
 
+// 1a. type/severity default to bug/med when omitted (back-compat for old callers).
+assert.equal(p.type, 'bug')
+assert.equal(p.severity, 'med')
+
+// 1b. explicit type/severity pass through; null severity falls back to the default.
+const p2 = buildReport({
+  ingestKey: 'k', note: 'x', type: 'feature', severity: 'crit',
+  pageUrl: 'https://x.com', innerWidth: 800, innerHeight: 600, userAgent: 'ua',
+})
+assert.equal(p2.type, 'feature')
+assert.equal(p2.severity, 'crit')
+const p3 = buildReport({
+  ingestKey: 'k', note: 'x', severity: null,
+  pageUrl: 'https://x.com', innerWidth: 800, innerHeight: 600, userAgent: 'ua',
+})
+assert.equal(p3.severity, 'med')
+
 // 2. Integration: post a report exactly as the extension would, to the running collector.
 const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 const url = process.env.COLLECTOR || 'http://localhost:4319'

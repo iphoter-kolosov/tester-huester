@@ -1,0 +1,13 @@
+{
+  "//": "Copy this block into the .mcp.json of the project you're QA-ing (or merge into its mcpServers). It runs the tester-huester MCP over stdio, scoped to ONE site via TH_PROJECT_KEY. Replace the two paths and the key.",
+  "mcpServers": {
+    "tester-huester": {
+      "command": "npx",
+      "args": ["-y", "tsx", "/ABSOLUTE/PATH/TO/tester-huester/apps/mcp/src/index.ts"],
+      "env": {
+        "SQLITE_FILE": "/ABSOLUTE/PATH/TO/tester-huester/th.db",
+        "TH_PROJECT_KEY": "thr_paste_the_projects_read_key_here"
+      }
+    }
+  }
+}

@@ -1,14 +1,16 @@
 import Link from 'next/link'
-import { notFound } from 'next/navigation'
+import { notFound, redirect } from 'next/navigation'
 import type { ReproBundle } from '@th/core'
 import { repo } from '@th/db'
 import StatusSelect from '@/components/StatusSelect'
 import ReproContext from '@/components/ReproContext'
 import ReplayPlayer from '@/components/ReplayPlayer'
+import { isAuthed } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
 export default async function ReportDetail({ params }: { params: Promise<{ id: string }> }) {
+  if (!(await isAuthed())) redirect('/login')
   const { id } = await params
   const r = repo.getReport(id)
   if (!r) notFound()
