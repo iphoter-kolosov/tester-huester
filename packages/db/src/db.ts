@@ -139,6 +139,20 @@ export const repo = {
       .run(crypto.randomUUID(), name, ingestKey, newReadKey(), Date.now())
     return this.getProjectByKey(ingestKey)!
   },
+  // Create a fresh project bucket with generated keys: an ingest key (point the extension at it to route new
+  // captures here) and a read key (hand to a dev agent for scoped read + status writes).
+  createProject(name: string): Project {
+    const id = crypto.randomUUID()
+    const ingestKey = 'th_' + crypto.randomBytes(16).toString('hex')
+    db().prepare('INSERT INTO projects (id, name, ingest_key, read_key, created_at) VALUES (?,?,?,?,?)')
+      .run(id, name.trim() || 'Project', ingestKey, newReadKey(), Date.now())
+    return this.getProjectById(id)!
+  },
+  // Reassign a report to another project bucket (human-only, from the dashboard) — this is how you scope which
+  // cases an agent sees: move exactly the ones it needs into its project.
+  moveReport(id: string, projectId: string): boolean {
+    return db().prepare('UPDATE reports SET project_id = ? WHERE id = ?').run(projectId, id).changes > 0
+  },
   createReport(x: NewReport): Report {
     const id = crypto.randomUUID()
     db().prepare(

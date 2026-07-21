@@ -1,11 +1,23 @@
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
+import { revalidatePath } from 'next/cache'
 import type { ReproBundle } from '@th/core'
 import { repo, type Report } from '@th/db'
 import StatusSelect from '@/components/StatusSelect'
+import ProjectSelect from '@/components/ProjectSelect'
 import { isAuthed } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
+
+// Create a new project bucket (human, dashboard-only). Its generated keys appear in the strip: give the read
+// key to a dev agent, point the extension's ingest key here to route new captures into it.
+async function createProject(formData: FormData) {
+  'use server'
+  if (!(await isAuthed())) return
+  const name = String(formData.get('name') || '').trim()
+  if (name) repo.createProject(name)
+  revalidatePath('/')
+}
 
 // Compact "console N · net M · steps K · X err" badges from the repro bundle, if any.
 function contextBadges(context: unknown) {
@@ -49,14 +61,15 @@ function host(pageUrl: string | null): string {
 export default async function Home({
   searchParams,
 }: {
-  searchParams: Promise<{ site?: string; type?: string; status?: string; sort?: string }>
+  searchParams: Promise<{ site?: string; type?: string; status?: string; sort?: string; project?: string }>
 }) {
   if (!(await isAuthed())) redirect('/login')
   const sp = await searchParams
-  const f = { site: sp.site || '', type: sp.type || '', status: sp.status || '', sort: sp.sort === 'old' ? 'old' : 'new' }
+  const f = { site: sp.site || '', type: sp.type || '', status: sp.status || '', project: sp.project || '', sort: sp.sort === 'old' ? 'old' : 'new' }
 
   const projects = repo.listProjects()
   const projName = new Map(projects.map((p) => [p.id, p.name] as const))
+  const projOpts = projects.map((p) => ({ id: p.id, name: p.name }))
   const all = repo.listReports({ limit: 1000 }) // newest-first from the DB
 
   // Every distinct site seen in the data — powers the Site filter.
@@ -67,9 +80,10 @@ export default async function Home({
   const matches = (r: Report) =>
     (!f.site || host(r.pageUrl) === f.site) &&
     (!f.type || r.type === f.type) &&
-    (!f.status || r.status === f.status)
+    (!f.status || r.status === f.status) &&
+    (!f.project || r.projectId === f.project)
   const shown = all.filter(matches)
-  const hasFilter = !!(f.site || f.type || f.status)
+  const hasFilter = !!(f.site || f.type || f.status || f.project)
 
   // Group the visible notes BY SITE. Order notes within a group by the chosen sort; order the groups by their
   // most-recent note so the freshest site floats to the top.
@@ -97,17 +111,26 @@ export default async function Home({
         </span>
       </div>
 
-      {projects.length > 0 && (
-        <div className="keys">
-          <span className="keyslbl">agent keys</span>
-          {projects.map((p) => (
-            <span className="keychip" key={p.id} title="Read key — give it to a QA agent (REST ?projectKey= / MCP TH_PROJECT_KEY)">
-              <b>{p.name}</b>
+      <div className="keys">
+        <span className="keyslbl">projects</span>
+        {projects.map((p) => (
+          <span className="keychip" key={p.id}>
+            <b>{p.name}</b>
+            <span className="keyrow" title="Give this to a dev agent: scoped read + status writes (MCP TH_PROJECT_KEY / REST ?projectKey=)">
+              <span className="keyk">agent</span>
               <code>{p.readKey || '—'}</code>
             </span>
-          ))}
-        </div>
-      )}
+            <span className="keyrow" title="Point the extension's ingest key here to route new captures into this project">
+              <span className="keyk">ingest</span>
+              <code>{p.ingestKey}</code>
+            </span>
+          </span>
+        ))}
+        <form className="newproj" action={createProject}>
+          <input name="name" placeholder="new project…" className="npin" maxLength={40} required />
+          <button type="submit" className="npbtn">+ Add</button>
+        </form>
+      </div>
 
       <form className="filters" action="/" method="get">
         <select name="site" defaultValue={f.site} className="fsel">
@@ -128,6 +151,14 @@ export default async function Home({
             <option key={s} value={s}>{s}</option>
           ))}
         </select>
+        {projects.length > 1 && (
+          <select name="project" defaultValue={f.project} className="fsel" title="Show only one project — what that agent's key exposes">
+            <option value="">Any project</option>
+            {projOpts.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+        )}
         <select name="sort" defaultValue={f.sort} className="fsel">
           <option value="new">Newest first</option>
           <option value="old">Oldest first</option>
@@ -160,7 +191,6 @@ export default async function Home({
                   <div className="tags">
                     <span className={'tp tp-' + r.type}>{TYPE_LABEL[r.type] ?? r.type}</span>
                     {r.severity ? <span className={'sv sv-' + r.severity}>{SEV_LABEL[r.severity] ?? r.severity}</span> : null}
-                    <span className="proj-tag">{projName.get(r.projectId) ?? 'project'}</span>
                   </div>
                   <div className={'note' + (r.note ? '' : ' empty2')}>{r.note || 'no note'}</div>
                   <div className="meta">
@@ -179,6 +209,7 @@ export default async function Home({
                 </div>
                 <div className="right">
                   <StatusSelect id={r.id} value={r.status} />
+                  <ProjectSelect id={r.id} value={r.projectId} projects={projOpts} />
                   <Link className="open" href={`/r/${r.id}`}>open →</Link>
                 </div>
               </div>

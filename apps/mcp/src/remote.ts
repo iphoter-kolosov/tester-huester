@@ -5,7 +5,8 @@ import { z } from 'zod'
 // Remote MCP shim: the SAME agent surface as src/index.ts, but reaching a DEPLOYED tester-huester over
 // HTTPS instead of the local SQLite file. This is what a project's chat on your own machine uses — it can't
 // touch the DB file on the VPS, so it reads the per-project REST API (GET /api/reports…?projectKey=<read_key>).
-// Read-only by design: an agent pulls its project's bugs into dev context; it does not mutate triage state.
+// Scoped to one project: reads its bugs into dev context, and may set the status of its OWN reports (the
+// dev agent marking a case fixed/wontfix as it works). It cannot touch other projects or move reports.
 //
 // Config (env):
 //   TH_COLLECTOR    base URL of the deployed instance, e.g. https://qa.ihor.work
@@ -18,6 +19,16 @@ if (!KEY) console.error('[mcp-remote] TH_PROJECT_KEY is not set (the project rea
 const STATUS = z.enum(['new', 'triaged', 'fixed', 'wontfix'])
 const TYPE = z.enum(['feature', 'bug', 'fix', 'text'])
 
+function hint(status: number): string {
+  return status === 401
+    ? ' (TH_PROJECT_KEY missing)'
+    : status === 403
+      ? ' (TH_PROJECT_KEY invalid for this project)'
+      : status === 404
+        ? ' (not found or not in this project)'
+        : ''
+}
+
 async function api(path: string, params: Record<string, string | number | undefined> = {}): Promise<string> {
   const url = new URL(BASE + path)
   url.searchParams.set('projectKey', KEY)
@@ -29,11 +40,23 @@ async function api(path: string, params: Record<string, string | number | undefi
     return `network error reaching ${BASE}: ${String(e)}`
   }
   const body = await res.text()
-  if (!res.ok) {
-    const hint =
-      res.status === 401 ? ' (TH_PROJECT_KEY missing)' : res.status === 403 ? ' (TH_PROJECT_KEY invalid for this project)' : res.status === 404 ? ' (not found or not in this project)' : ''
-    return `HTTP ${res.status}${hint}: ${body.slice(0, 300)}`
+  if (!res.ok) return `HTTP ${res.status}${hint(res.status)}: ${body.slice(0, 300)}`
+  return body
+}
+
+// Scoped write: PATCH /api/reports/:id?projectKey=… { status }. The collector only allows it on reports that
+// belong to THIS project's read key, so an agent can only ever change the status of its own cases.
+async function patch(path: string, payload: Record<string, unknown>): Promise<string> {
+  const url = new URL(BASE + path)
+  url.searchParams.set('projectKey', KEY)
+  let res: Response
+  try {
+    res = await fetch(url, { method: 'PATCH', headers: { Accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify(payload) })
+  } catch (e) {
+    return `network error reaching ${BASE}: ${String(e)}`
   }
+  const body = await res.text()
+  if (!res.ok) return `HTTP ${res.status}${hint(res.status)}: ${body.slice(0, 300)}`
   return body
 }
 
@@ -60,6 +83,13 @@ server.tool(
   'Get an agent-ready reproduction for a report: numbered user steps (from the recorded action trail) plus a triage summary (console errors, failed network requests, environment).',
   { id: z.string() },
   async ({ id }) => ({ content: [{ type: 'text', text: await api(`/api/reports/${encodeURIComponent(id)}/repro`) }] }),
+)
+
+server.tool(
+  'set_status',
+  "Update the triage status of one report in THIS project as you work through it: 'triaged' when you pick it up, 'fixed' when done, 'wontfix' if declined. Only reports belonging to this project can be changed.",
+  { id: z.string(), status: STATUS },
+  async ({ id, status }) => ({ content: [{ type: 'text', text: await patch(`/api/reports/${encodeURIComponent(id)}`, { status }) }] }),
 )
 
 const transport = new StdioServerTransport()
