@@ -23,6 +23,8 @@ const fmt = (ms: number) => {
 export default function ReplayPlayer({ url }: { url: string }) {
   const host = useRef<HTMLDivElement>(null)
   const rep = useRef<Replayerish | null>(null)
+  const dims = useRef<{ w: number; h: number }>({ w: 1280, h: 720 }) // recorded viewport (from the Meta event)
+  const ro = useRef<ResizeObserver | null>(null)
   const timer = useRef<ReturnType<typeof setInterval> | null>(null) // setInterval, not rAF — rAF pauses when the tab is hidden
   const startWall = useRef(0) // performance.now() when the current play began
   const startOffset = useRef(0) // replay offset (ms) the current play began at
@@ -31,6 +33,20 @@ export default function ReplayPlayer({ url }: { url: string }) {
   const [playing, setPlaying] = useState(false)
   const [total, setTotal] = useState(0)
   const [cur, setCur] = useState(0)
+
+  // Scale rrweb's recorded-size wrapper down to the panel width (never up past 1×), and set the panel height to
+  // match so there's no letterbox or clipping. Uses the recorded dims (dims.current), so it's correct even
+  // before the iframe has been laid out.
+  function fit() {
+    const h = host.current
+    if (!h) return
+    const wrapper = h.querySelector('.replayer-wrapper') as HTMLElement | null
+    if (!wrapper) return
+    const scale = Math.min(1, (h.clientWidth || 900) / dims.current.w)
+    wrapper.style.transform = `scale(${scale})`
+    wrapper.style.transformOrigin = 'top left'
+    h.style.height = `${Math.round(dims.current.h * scale)}px`
+  }
 
   useEffect(() => {
     let cancelled = false
@@ -42,6 +58,12 @@ export default function ReplayPlayer({ url }: { url: string }) {
         const events = data.events ?? []
         if (cancelled) return
         if (events.length < 2) return setState('empty')
+
+        // Recorded viewport comes from the rrweb Meta event (type 4) — ground truth, available immediately.
+        // Reading it here (not iframe.offsetWidth, which is 0 until rrweb lays the iframe out) is what makes
+        // the fit correct instead of showing the top-left crop of a 2560px page in a narrow panel.
+        const meta = (events as Array<{ type?: number; data?: { width?: number; height?: number } }>).find((e) => e.type === 4)
+        dims.current = { w: meta?.data?.width || 1280, h: meta?.data?.height || 720 }
 
         const { Replayer } = await import('rrweb')
         if (cancelled || !host.current) return
@@ -64,15 +86,11 @@ export default function ReplayPlayer({ url }: { url: string }) {
           setCur(totalRef.current)
         })
 
-        // rrweb renders at the recorded viewport size; scale the wrapper to fit our panel width.
-        const wrapper = host.current.querySelector('.replayer-wrapper') as HTMLElement | null
-        const iframe = wrapper?.querySelector('iframe') as HTMLIFrameElement | null
-        if (wrapper && iframe) {
-          const scale = Math.min(1, (host.current.clientWidth || 900) / (iframe.offsetWidth || 1280))
-          wrapper.style.transform = `scale(${scale})`
-          wrapper.style.transformOrigin = 'top left'
-          host.current.style.height = `${Math.round((iframe.offsetHeight || 720) * scale)}px`
-        }
+        // rrweb renders at the recorded viewport size; scale the wrapper to fit our panel width, and keep it
+        // fitted when the panel resizes (window resize, sidebar toggle, etc.).
+        fit()
+        ro.current = new ResizeObserver(() => fit())
+        if (host.current) ro.current.observe(host.current)
         setState('ready')
       } catch {
         if (!cancelled) setState('error')
@@ -82,6 +100,8 @@ export default function ReplayPlayer({ url }: { url: string }) {
     return () => {
       cancelled = true
       if (timer.current) clearInterval(timer.current)
+      ro.current?.disconnect()
+      ro.current = null
       try {
         rep.current?.pause()
         rep.current?.destroy?.()
