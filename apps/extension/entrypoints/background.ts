@@ -65,10 +65,18 @@ export default defineBackground(() => {
     if (cmd === 'capture') capture()
   })
 
-  chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+  chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (msg?.type === 'TH_CAPTURE') {
       capture()
       return
+    }
+    if (msg?.type === 'TH_SHOT') {
+      // Screenshot for the explicit "record repro" flow: the content script asks for a fresh frame when the
+      // tester presses Stop, then reopens the overlay with it + the recorded clip.
+      const winId = sender.tab?.windowId
+      const shoot = winId != null ? chrome.tabs.captureVisibleTab(winId, { format: 'png' }) : chrome.tabs.captureVisibleTab({ format: 'png' })
+      shoot.then((shot) => sendResponse({ ok: true, shot })).catch((e) => sendResponse({ ok: false, error: String(e) }))
+      return true
     }
     if (msg?.type === 'TH_SEND') {
       fetch(`${msg.collectorUrl}/api/ingest`, {

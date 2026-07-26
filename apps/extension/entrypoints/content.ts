@@ -3,7 +3,7 @@ import type { ReproBundle, Tool, Width } from '@th/core'
 import { getConfig } from '@/lib/config'
 import { buildReport, type ReportType, type Severity } from '@/lib/report'
 import { requestBundle } from '@/lib/bridge'
-import { startReplay, snapshotReplay, REPLAY_BLOCK_CLASS, type RREvent } from '@/lib/replay'
+import { startReplay, snapshotReplay, startClip, snapshotSince, REPLAY_BLOCK_CLASS, type RREvent } from '@/lib/replay'
 
 // The in-page overlay. Lives in a shadow root so the host site's CSS can't touch it. Background hands us a
 // screenshot; we let the tester draw / annotate / note, then post it (via background) to the collector.
@@ -26,10 +26,11 @@ export default defineContentScript({
     chrome.runtime.onMessage.addListener((msg) => {
       if (msg?.type === 'TH_OPEN' && !open) {
         open = true
-        // Snapshot repro bundle AND replay at trigger time — BEFORE the overlay mounts — so the tester's own
-        // clicks on our UI don't pollute the trail/replay. Bundle is null where the MAIN world didn't load.
-        const replay = snapshotReplay()
-        requestBundle().then((context) => mount(msg.shot as string, context, replay, () => { open = false }))
+        // Snapshot the repro bundle (action trail/console/net) at trigger — before the overlay mounts — so the
+        // tester's own clicks on our UI don't pollute it. The REPLAY, however, is snapshotted at SEND time (the
+        // overlay is block-classed out of the recording): this way a recorder that only just started on a freshly
+        // injected tab still has produced frames by the time the report is sent, instead of an empty capture.
+        requestBundle().then((context) => mount(msg.shot as string, context, () => snapshotReplay(), () => { open = false }))
       }
     })
   },
@@ -107,9 +108,31 @@ const CSS = `
 .tinhint { margin-left: auto; font-size: 11px; color: #8ea0bd; font-weight: 700; white-space: nowrap; }
 .tinhint b { color: #38bdf8; }
 .tmark { position: fixed; z-index: 11; display: none; width: 12px; height: 12px; margin: -6px 0 0 -6px; pointer-events: none; border: 2px solid #0a84ff; border-radius: 50%; box-shadow: 0 0 0 2px rgba(3,7,18,.6); }
+.recst { font-size: 11.5px; font-weight: 800; white-space: nowrap; }
+.recst.ok { color: #34d399; }
+.recst.warn { color: #fbbf24; }
+.btn.rec { margin-left: auto; border-color: #b91c1c; color: #fca5a5; }
+.btn.rec:hover { border-color: #ef4444; color: #fff; }
 `
 
-function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onClose: () => void) {
+// The floating "recording" bar shown while an explicit repro is being recorded (its own shadow host, tagged
+// with REPLAY_BLOCK_CLASS so it never enters the recording).
+const BAR_CSS = `
+:host, * { box-sizing: border-box; }
+.bar { display: flex; align-items: center; gap: 12px; padding: 10px 12px 10px 16px; background: #131a2b; color: #e6edf7; border: 1px solid #b91c1c; border-radius: 12px; font: 13px system-ui, sans-serif; box-shadow: 0 20px 50px -12px rgba(0,0,0,.7); }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: #ef4444; animation: thpulse 1.2s infinite; }
+@keyframes thpulse { 0% { box-shadow: 0 0 0 0 rgba(239,68,68,.6); } 70% { box-shadow: 0 0 0 8px rgba(239,68,68,0); } 100% { box-shadow: 0 0 0 0 rgba(239,68,68,0); } }
+.lbl { font-weight: 700; }
+.tm { font-variant-numeric: tabular-nums; color: #8ea0bd; font-weight: 800; min-width: 36px; }
+.stop { height: 32px; padding: 0 14px; border: 0; border-radius: 9px; background: #b91c1c; color: #fff; font-weight: 800; cursor: pointer; }
+.stop:hover { background: #dc2626; }
+`
+
+function mount(shot: string, context: ReproBundle | null, getReplay: () => RREvent[], onClose: () => void) {
+  // The replay attached to this report. Starts as the auto retrospective (evaluated at send); an explicit
+  // "record repro" clip replaces it. Kept as a thunk so auto stays live until the moment of sending.
+  let replaySource = getReplay
+  let recTimer: ReturnType<typeof setInterval> | null = null
   const host = document.createElement('div')
   host.className = REPLAY_BLOCK_CLASS // keep our own overlay out of any ongoing replay recording
   host.style.cssText = 'all: initial; position: fixed; inset: 0; z-index: 2147483647;'
@@ -118,7 +141,7 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
     <style>${CSS}</style>
     <div class="scrim" part="scrim">
       <div class="card">
-        <div class="head"><span class="title"></span><span class="ctxhint"></span><button class="x" title="Close">✕</button></div>
+        <div class="head"><span class="title"></span><span class="recst"></span><span class="ctxhint"></span><button class="x" title="Close">✕</button></div>
         <canvas class="canvas"></canvas>
         <div class="tools">
           ${DEFAULT_COLORS.map((c, i) => `<button class="sw${i === 0 ? ' on' : ''}" data-c="${c}" style="background:${c}"></button>`).join('')}
@@ -153,6 +176,7 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
         <textarea class="note" placeholder="What's wrong here?"></textarea>
         <div class="foot">
           <span class="msg"></span>
+          <button class="btn ghost rec" title="Записать репро: свернуть окно, воспроизвести баг, ⏹ Стоп — клип прикрепится">🔴 Записать репро</button>
           <button class="btn ghost cancel">Cancel</button>
           <button class="btn send">Send</button>
         </div>
@@ -185,6 +209,8 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
   const tinInput = q<HTMLInputElement>('.tin input')
   const tmark = q<HTMLElement>('.tmark')
   const psel = q<HTMLSelectElement>('.psel')
+  const recBtn = q<HTMLButtonElement>('.rec')
+  const recstEl = q<HTMLElement>('.recst')
 
   // Form state (shared with track A via the exact field names note/type/severity).
   let type: ReportType = 'bug'
@@ -192,7 +218,7 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
   let projectId: string | null = null // chosen in the project picker; null → route by the ingest key
   let pendingText: { x: number; y: number } | null = null
 
-  const close = () => { document.removeEventListener('keydown', onKey, true); host.remove(); onClose() }
+  const close = () => { if (recTimer) clearInterval(recTimer); document.removeEventListener('keydown', onKey, true); host.remove(); onClose() }
 
   // Standard editor hotkeys across the whole overlay. Keyed off e.code (PHYSICAL key: 'KeyP', 'KeyZ', 'Digit1'),
   // NOT e.key — so they work under any keyboard layout (RU/EN/HU) and on every OS, where e.key would return a
@@ -242,8 +268,24 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
     if (context.network?.length) bits.push(`<b>${context.network.length}</b> net`)
     if (errs) bits.push(`<span class="e"><b>${errs}</b> err</span>`)
   }
-  if (replay.length) bits.push(`<b>▶</b> replay`)
   hint.innerHTML = bits.length ? '📋 ' + bits.join(' · ') + ' captured' : ''
+
+  // Live recording indicator — shows the human whether there is a screencast to attach and how long it is, so
+  // an empty/short capture is never a silent surprise. Reads the exact replay that WILL be sent (replaySource).
+  const spanOf = (evs: RREvent[]) => {
+    if (evs.length < 2) return 0
+    const ts = evs.map((e) => e.timestamp).filter(Boolean)
+    return ts.length ? (Math.max(...ts) - Math.min(...ts)) / 1000 : 0
+  }
+  const fmtDur = (s: number) => (s < 60 ? `${Math.round(s)}с` : `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, '0')}`)
+  const updateRec = () => {
+    const s = spanOf(replaySource())
+    if (s < 1) { recstEl.className = 'recst warn'; recstEl.textContent = '⚠ записи нет — «Записать репро»' }
+    else if (s < 3) { recstEl.className = 'recst warn'; recstEl.textContent = `⚠ короткая (${fmtDur(s)})` }
+    else { recstEl.className = 'recst ok'; recstEl.textContent = `🔴 запись ${fmtDur(s)}` }
+  }
+  updateRec()
+  recTimer = setInterval(updateRec, 1500)
 
   const refresh = () => {
     undoBtn.disabled = !ann.canUndo()
@@ -333,6 +375,50 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
   clearBtn.addEventListener('click', () => ann.clearAll())
   q<HTMLElement>('.x').addEventListener('click', close)
   q<HTMLElement>('.cancel').addEventListener('click', close)
+  recBtn.addEventListener('click', () => { void recordRepro() })
+
+  // Explicit repro recording: hide this modal so the tester can reproduce the bug on the live page while a
+  // floating bar records; Stop → fresh screenshot + attach the clip. Guaranteed non-empty — WE control the
+  // start (forced checkpoint), so it never depends on how long the tab happened to be open.
+  async function recordRepro() {
+    const mark = startClip()
+    host.style.display = 'none' // free the page for interaction; keep this overlay instance to reuse on Stop
+    document.removeEventListener('keydown', onKey, true)
+
+    const bar = document.createElement('div')
+    bar.className = REPLAY_BLOCK_CLASS
+    bar.style.cssText = 'all: initial; position: fixed; z-index: 2147483647; left: 50%; bottom: 26px; transform: translateX(-50%);'
+    const broot = bar.attachShadow({ mode: 'open' })
+    broot.innerHTML = `<style>${BAR_CSS}</style><div class="bar"><span class="dot"></span><span class="lbl">Запись репро — воспроизведите баг</span><span class="tm">0:00</span><button class="stop">⏹ Стоп (Esc)</button></div>`
+    document.documentElement.appendChild(bar)
+
+    const t0 = Date.now()
+    const tmEl = broot.querySelector('.tm') as HTMLElement
+    const iv = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); tmEl.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` }, 250)
+
+    let done = false
+    const onBarKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); void stop() } }
+    const stop = async () => {
+      if (done) return
+      done = true
+      clearInterval(iv)
+      document.removeEventListener('keydown', onBarKey, true)
+      const clip = snapshotSince(mark)
+      bar.remove()
+      let freshShot = ''
+      try { const res = await chrome.runtime.sendMessage({ type: 'TH_SHOT' }); if (res?.ok && res.shot) freshShot = res.shot as string } catch {}
+      const ctx = await requestBundle().catch(() => null)
+      if (freshShot) await ann.setImage(freshShot).then(refresh).catch(() => {})
+      if (ctx) context = ctx // end-of-repro context: the trail/console/net now includes the reproduction
+      replaySource = () => clip
+      host.style.display = ''
+      document.addEventListener('keydown', onKey, true)
+      updateRec()
+      setMsg(`Репро записано: ${fmtDur(spanOf(clip))} ✓ — допишите заметку и Send`, 'ok')
+    }
+    document.addEventListener('keydown', onBarKey, true)
+    ;(broot.querySelector('.stop') as HTMLElement).addEventListener('click', () => { void stop() })
+  }
 
   // Populate the project picker from the account's projects (fetched via background → collector), preselecting
   // the ingest key's own project. Choosing another routes the report there on send.
@@ -371,8 +457,10 @@ function mount(shot: string, context: ReproBundle | null, replay: RREvent[], onC
     setMsg('Sending…')
     try {
       // Replay events ride alongside the report (they're large → the collector stores them as a blob, not
-      // in the report row). Cap serialized size so a churn-heavy page can't produce a monster payload.
-      const replayPayload = replay.length && JSON.stringify(replay).length < 4_000_000 ? replay : undefined
+      // in the report row). Evaluated at SEND (auto) or the frozen explicit clip. Cap serialized size so a
+      // churn-heavy page can't produce a monster payload.
+      const replay = replaySource()
+      const replayPayload = replay.length > 1 && JSON.stringify(replay).length < 4_000_000 ? replay : undefined
       const res = await chrome.runtime.sendMessage({ type: 'TH_SEND', collectorUrl: cfg.collectorUrl, payload: { ...payload, replay: replayPayload } })
       if (res?.ok) { setMsg('Sent ✓', 'ok'); setTimeout(close, 900) }
       else { setMsg('Failed: ' + (res?.error || 'server error'), 'err'); sendBtn.disabled = false }

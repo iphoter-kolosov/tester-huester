@@ -60,6 +60,34 @@ export function snapshotReplay(): RREvent[] {
   return sliceRecentEvents(matrix)
 }
 
+// EXPLICIT repro recording. Force a fresh checkout (Meta+FullSnapshot) so a clip can boot cleanly, and return
+// the wall-clock mark. rrweb keeps recording continuously (the same recorder), so snapshotSince(mark) at "Stop"
+// yields exactly the reproduction the tester just performed — guaranteed non-empty because WE control the start.
+export function startClip(): number {
+  const mark = Date.now()
+  try {
+    ;(record as unknown as { takeFullSnapshot?: (isCheckout?: boolean) => void }).takeFullSnapshot?.(true)
+  } catch {
+    // if takeFullSnapshot is unavailable, snapshotSince still boots from the last checkout before `mark`
+  }
+  return mark
+}
+
+// Slice a bootable clip covering everything from ~`mark` onward. Anchors to the last Meta+FullSnapshot at/just
+// before the mark (the clip's first frame); falls back to the first snapshot after it, then to any snapshot.
+export function snapshotSince(mark: number): RREvent[] {
+  const flat = matrix.flat()
+  let boot = -1
+  for (let i = 0; i < flat.length - 1; i++) {
+    if (flat[i]!.type === META && flat[i + 1]!.type === FULL_SNAPSHOT) {
+      if (flat[i]!.timestamp <= mark + 50) boot = i // latest boot frame at/before the mark
+      else if (boot < 0) { boot = i; break } // none before the mark → first one after
+    }
+  }
+  if (boot < 0) boot = flat.findIndex((e) => e.type === FULL_SNAPSHOT)
+  return boot >= 0 ? flat.slice(boot) : []
+}
+
 // Pure + unit-tested: flatten the retained window and return a slice that BOOTS a Replayer — i.e. starting at
 // a Meta immediately followed by a FullSnapshot. rrweb emits Meta then FullSnapshot on every checkout, so the
 // segment split can leave a segment headed by a bare FullSnapshot; we re-anchor to the Meta/FullSnapshot pair.
