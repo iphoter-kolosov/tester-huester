@@ -77,6 +77,8 @@ export function replayHealth(events: ReplayEvent[]): ReplayHealth {
 
 export function replaySpanSeconds(events: ReplayEvent[]): number {
   if (!events || events.length < 2) return 0
-  const ts = events.map((e) => e.timestamp).filter(Boolean)
+  // Filter by TYPE, not truthiness: a legitimate timestamp of 0 would be dropped by `filter(Boolean)`, which
+  // silently shortens the measured span (and, downstream, mis-clamps a trim range).
+  const ts = events.map((e) => e.timestamp).filter((t) => typeof t === 'number')
   return ts.length ? (Math.max(...ts) - Math.min(...ts)) / 1000 : 0
 }

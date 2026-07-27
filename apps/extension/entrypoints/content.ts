@@ -5,7 +5,7 @@ import { buildReport, type ReportType, type Severity } from '@/lib/report'
 import { requestBundle } from '@/lib/bridge'
 import {
   startReplay, snapshotReplay, startExplicitClip, stopExplicitClip, clipSeconds,
-  spanSeconds, recorderDiag, REPLAY_BLOCK_CLASS, type RREvent,
+  spanSeconds, recorderDiag, trimClip, trimPoints, REPLAY_BLOCK_CLASS, type RREvent,
 } from '@/lib/replay'
 
 // The in-page overlay. Lives in a shadow root so the host site's CSS can't touch it. Background hands us a
@@ -115,6 +115,16 @@ const CSS = `
 .recst { font-size: 11.5px; font-weight: 800; white-space: nowrap; }
 .recst.ok { color: #34d399; }
 .recst.warn { color: #fbbf24; }
+.clip { display: none; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid #223049; border-radius: 10px; background: #0f1626; }
+.clip.on { display: flex; }
+.clipchk { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 700; cursor: pointer; user-select: none; }
+.clipchk input { width: 15px; height: 15px; accent-color: #0a84ff; cursor: pointer; }
+.cliprng { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 260px; }
+.cliprng input[type=range] { flex: 1; accent-color: #0a84ff; cursor: pointer; min-width: 90px; }
+.cliplbl { font-size: 11px; font-weight: 800; color: #8ea0bd; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.clipsum { font-size: 11.5px; font-weight: 700; color: #e6edf7; white-space: nowrap; }
+.clipsum b { color: #38bdf8; }
+.clipoff { color: #8ea0bd; font-size: 11.5px; font-weight: 700; }
 .btn.rec { margin-left: auto; border-color: #b91c1c; color: #fca5a5; }
 .btn.rec:hover { border-color: #ef4444; color: #fff; }
 `
@@ -197,6 +207,16 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
           <select class="psel"><option value="">по умолчанию</option></select>
           <span class="khint"><b>Ctrl+Enter</b> отправить · <b>Esc</b> закрыть</span>
         </div>
+        <div class="clip">
+          <label class="clipchk"><input type="checkbox" class="clipon" checked /> Приложить запись</label>
+          <span class="cliprng">
+            <span class="cliplbl">от <span class="clipfrom">0:00</span></span>
+            <input type="range" class="clipa" min="0" max="100" value="0" />
+            <input type="range" class="clipb" min="0" max="100" value="100" />
+            <span class="cliplbl">до <span class="clipto">0:00</span></span>
+          </span>
+          <span class="clipsum"></span>
+        </div>
         <textarea class="note" placeholder="What's wrong here?"></textarea>
         <div class="foot">
           <span class="msg"></span>
@@ -235,6 +255,13 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   const psel = q<HTMLSelectElement>('.psel')
   const recBtn = q<HTMLButtonElement>('.rec')
   const recstEl = q<HTMLElement>('.recst')
+  const clipBox = q<HTMLElement>('.clip')
+  const clipOn = q<HTMLInputElement>('.clipon')
+  const clipA = q<HTMLInputElement>('.clipa')
+  const clipB = q<HTMLInputElement>('.clipb')
+  const clipFrom = q<HTMLElement>('.clipfrom')
+  const clipTo = q<HTMLElement>('.clipto')
+  const clipSum = q<HTMLElement>('.clipsum')
 
   // Form state (shared with track A via the exact field names note/type/severity).
   let type: ReportType = 'bug'
@@ -319,8 +346,58 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     else if (s < 3) { recstEl.className = 'recst warn'; recstEl.textContent = `⚠ короткая (${fmtDur(s)})` }
     else { recstEl.className = 'recst ok'; recstEl.textContent = `🔴 запись ${fmtDur(s)}` }
   }
+  // ── Attach-the-recording panel ───────────────────────────────────────────────────────────────────────
+  // A long clip is mostly lead-up the reader doesn't need, so the tester decides what actually ships: attach
+  // it or not, and which stretch. The action trail always goes regardless — it is small and is what an agent
+  // reads. The left handle snaps to a recording checkpoint (the only points a clip can legally start from).
+  const fmtT = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`
+  const kb = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)} МБ` : `${Math.max(1, Math.round(n / 1024))} КБ`)
+
+  // The exact events the Send button will attach, honouring the checkbox and the two handles.
+  function selectedClip(): RREvent[] {
+    if (!clipOn.checked) return []
+    const evs = replaySource()
+    const total = spanOf(evs)
+    if (total < 1) return evs
+    const a = (Number(clipA.value) / 100) * total
+    const b = (Number(clipB.value) / 100) * total
+    return trimClip(evs, Math.min(a, b), Math.max(a, b)).events
+  }
+
+  function updateClipPanel() {
+    const evs = replaySource()
+    const total = spanOf(evs)
+    if (total < 1) { clipBox.classList.remove('on'); return }
+    clipBox.classList.add('on')
+
+    const on = clipOn.checked
+    clipA.disabled = !on
+    clipB.disabled = !on
+    if (!on) {
+      clipFrom.textContent = '—'
+      clipTo.textContent = '—'
+      clipSum.innerHTML = `<span class="clipoff">запись не отправится · слепок действий приложится</span>`
+      return
+    }
+    const a = (Number(clipA.value) / 100) * total
+    const b = (Number(clipB.value) / 100) * total
+    const res = trimClip(evs, Math.min(a, b), Math.max(a, b))
+    clipFrom.textContent = fmtT(res.from) // the snapped-back checkpoint, i.e. what will really be sent
+    clipTo.textContent = fmtT(res.to)
+    const raw = JSON.stringify(res.events).length
+    const dur = Math.max(0, res.to - res.from)
+    const pts = trimPoints(evs).length
+    clipSum.innerHTML =
+      `<b>${fmtT(dur)}</b> из ${fmtT(total)} · ~${kb(raw / 6)} (сжато)` +
+      (pts > 1 ? '' : ' · шаг начала — 30с')
+  }
+
+  for (const el of [clipA, clipB]) el.addEventListener('input', updateClipPanel)
+  clipOn.addEventListener('change', updateClipPanel)
+
   updateRec()
-  recTimer = setInterval(updateRec, 1500)
+  updateClipPanel()
+  recTimer = setInterval(() => { updateRec(); updateClipPanel() }, 1500)
 
   const refresh = () => {
     undoBtn.disabled = !ann.canUndo()
@@ -464,7 +541,12 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       replaySource = () => clip
       host.style.display = ''
       document.addEventListener('keydown', onKey, true)
+      // A fresh clip resets the trim to "all of it" — the tester narrows down from there if they want to.
+      clipOn.checked = true
+      clipA.value = '0'
+      clipB.value = '100'
       updateRec()
+      updateClipPanel()
 
       const dur = fmtDur(spanOf(clip))
       if (clip.length < 2) setMsg('Запись не получилась — попробуйте ещё раз', 'err')
@@ -521,7 +603,7 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       // The clip is the payload's bulk: a minute of a dense admin UI serialises to several MB, which the old
       // 4 MB cut-off silently discarded. Gzip it (rrweb JSON compresses ~10x) and send the compressed blob;
       // only a clip that is still oversized AFTER compression is dropped — and then it is said out loud.
-      const replay = replaySource()
+      const replay = selectedClip() // what the tester chose to attach (possibly nothing, possibly a trim)
       let replayPayload: RREvent[] | undefined
       let replayGz: string | undefined
       let replayWarn = ''
@@ -543,7 +625,8 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       if (res?.ok) {
         // Never let a green "sent" paper over a dropped recording — the tester must know what actually landed.
         if (replayWarn) setMsg(`Отправлено, но ${replayWarn}`, 'warn')
-        else setMsg(replayGz || replayPayload ? `Отправлено ✓ (запись ${fmtDur(spanOf(replay))})` : 'Отправлено ✓ (без записи)', 'ok')
+        else if (replayGz || replayPayload) setMsg(`Отправлено ✓ (запись ${fmtDur(spanOf(replay))})`, 'ok')
+        else setMsg(clipOn.checked ? 'Отправлено ✓ (без записи)' : 'Отправлено ✓ (запись не приложена — по вашему выбору)', 'ok')
         setTimeout(close, replayWarn ? 2600 : 1100)
       } else { setMsg('Failed: ' + (res?.error || 'server error'), 'err'); sendBtn.disabled = false }
     } catch (e) {
