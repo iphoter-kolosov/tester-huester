@@ -44,6 +44,11 @@ export function replayHealth(events: ReplayEvent[]): ReplayHealth {
 
   let resolved = 0
   let missing = 0
+  const count = (id: number | undefined) => {
+    if (id == null || id < 0) return
+    if (known.has(id)) resolved++
+    else missing++
+  }
   for (const e of events) {
     if (e.type !== INCREMENTAL) continue
     const d = (e.data ?? {}) as {
@@ -52,18 +57,17 @@ export function replayHealth(events: ReplayEvent[]): ReplayHealth {
       removes?: { id?: number }[]
       adds?: { parentId?: number; node?: SnapNode }[]
     }
-    const refs: (number | undefined)[] = []
-    for (const a of d.attributes ?? []) refs.push(a.id)
-    for (const t of d.texts ?? []) refs.push(t.id)
-    for (const r of d.removes ?? []) refs.push(r.id)
-    for (const a of d.adds ?? []) refs.push(a.parentId)
-    for (const r of refs) {
-      if (r == null || r < 0) continue
-      if (known.has(r)) resolved++
-      else missing++
+    // Walk in rrweb's own apply order — removes, then adds (each add makes its subtree addressable for
+    // everything after it), then texts, then attributes. Checking refs before folding in that batch's adds
+    // reports healthy clips as broken: a React re-render adds thousands of nodes and immediately addresses
+    // them, so the parentIds legitimately resolve only once the earlier adds have been applied.
+    for (const r of d.removes ?? []) count(r.id)
+    for (const a of d.adds ?? []) {
+      count(a.parentId)
+      walk(a.node)
     }
-    // Nodes introduced by this mutation become addressable for the ones that follow.
-    for (const a of d.adds ?? []) walk(a.node)
+    for (const t of d.texts ?? []) count(t.id)
+    for (const a of d.attributes ?? []) count(a.id)
   }
 
   const total = resolved + missing

@@ -5,7 +5,7 @@ import { buildReport, type ReportType, type Severity } from '@/lib/report'
 import { requestBundle } from '@/lib/bridge'
 import {
   startReplay, snapshotReplay, startExplicitClip, stopExplicitClip, clipSeconds,
-  spanSeconds, clipHealth, REPLAY_BLOCK_CLASS, type RREvent,
+  spanSeconds, REPLAY_BLOCK_CLASS, type RREvent,
 } from '@/lib/replay'
 
 // The in-page overlay. Lives in a shadow root so the host site's CSS can't touch it. Background hands us a
@@ -297,7 +297,6 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     const evs = replaySource()
     const s = spanOf(evs)
     if (s < 1) { recstEl.className = 'recst warn'; recstEl.textContent = '⚠ записи нет — нажми «Записать репро»' }
-    else if (!clipHealth(evs).playable) { recstEl.className = 'recst warn'; recstEl.textContent = '⚠ запись повреждена — «Записать репро»' }
     else if (s < 3) { recstEl.className = 'recst warn'; recstEl.textContent = `⚠ короткая (${fmtDur(s)})` }
     else { recstEl.className = 'recst ok'; recstEl.textContent = `🔴 запись ${fmtDur(s)}` }
   }
@@ -448,9 +447,8 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       document.addEventListener('keydown', onKey, true)
       updateRec()
 
-      const health = clipHealth(clip)
       const dur = fmtDur(spanOf(clip))
-      if (!health.playable) setMsg(`Запись не получилась (${health.reason}) — попробуйте ещё раз`, 'err')
+      if (clip.length < 2) setMsg('Запись не получилась — попробуйте ещё раз', 'err')
       else if (!shotOk) setMsg(`Репро записано: ${dur} ✓ — но скриншот не обновился (кадр до репро)`, 'warn')
       else setMsg(`Репро записано: ${dur} ✓ — допишите заметку и Send`, 'ok')
       recBtn.disabled = false
@@ -503,13 +501,13 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       let replayPayload: RREvent[] | undefined
       let replayWarn = ''
       if (replay.length > 1) {
-        const health = clipHealth(replay)
         const bytes = JSON.stringify(replay).length
-        if (!health.playable) replayWarn = 'запись не приложена (повреждена)'
-        else if (bytes >= 4_000_000) replayWarn = `запись не приложена (${Math.round(bytes / 1e6)} МБ — слишком большая)`
+        // Size is the ONLY hard reason to drop a clip (the collector can't store an unbounded blob). Health is
+        // advisory: a heuristic must never be the thing that silently withholds a recording the tester made.
+        if (bytes >= 4_000_000) replayWarn = `запись не приложена (${Math.round(bytes / 1e6)} МБ — слишком большая)`
         else replayPayload = replay
       }
-      if (replayWarn) setMsg(`Отправка… ⚠ ${replayWarn}`, 'err')
+      if (replayWarn) setMsg(`Отправка… ⚠ ${replayWarn}`, 'warn')
       const res = await chrome.runtime.sendMessage({ type: 'TH_SEND', collectorUrl: cfg.collectorUrl, payload: { ...payload, replay: replayPayload } })
       if (res?.ok) { setMsg('Sent ✓', 'ok'); setTimeout(close, 900) }
       else { setMsg('Failed: ' + (res?.error || 'server error'), 'err'); sendBtn.disabled = false }
