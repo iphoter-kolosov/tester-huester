@@ -1,10 +1,22 @@
 import assert from 'node:assert/strict'
-import { sliceRecentEvents, type RREvent } from './replay'
+import { sliceRecentEvents, clipHealth, spanSeconds, type RREvent } from './replay'
 
 const META = 4
 const FULL = 2
 const INC = 3
 const e = (type: number, ts: number): RREvent => ({ type, timestamp: ts })
+
+// Builders for the health check: a snapshot holding node ids 1..n, and mutations addressing given ids.
+const snapEvent = (ids: number[], ts = 0): RREvent => ({
+  type: FULL,
+  timestamp: ts,
+  data: { node: { id: ids[0], childNodes: ids.slice(1).map((id) => ({ id, childNodes: [] })) } },
+})
+const mutation = (refs: number[], ts: number): RREvent => ({
+  type: INC,
+  timestamp: ts,
+  data: { source: 0, texts: refs.map((id) => ({ id })), attributes: [], removes: [], adds: [] },
+})
 
 // 1. Window keeps only the last 3 segments and re-anchors to a Meta+FullSnapshot pair so a Replayer can boot.
 {
@@ -37,6 +49,53 @@ const e = (type: number, ts: number): RREvent => ({ type, timestamp: ts })
 {
   const seg: RREvent[] = [e(META, 0), e(FULL, 0), e(INC, 1), e(INC, 2)]
   assert.deepEqual(sliceRecentEvents([seg]), seg, 'clean single segment passes through')
+}
+
+// 5. clipHealth catches the real-world failure that made replays freeze: a clip whose mutations address nodes
+//    the snapshot never contained (snapshot and mutations from different moments). rrweb drops those silently,
+//    rendering a still frame with only the cursor moving — so we must refuse to call such a clip playable.
+{
+  const broken: RREvent[] = [
+    e(META, 0),
+    snapEvent([1, 2, 3], 0),
+    mutation([9001, 9002, 9003], 10),
+    mutation([9004, 9005, 9006], 20),
+  ]
+  const h = clipHealth(broken)
+  assert.equal(h.playable, false, 'unresolvable mutations → not playable')
+  assert.equal(h.reason, 'mutations_unresolved')
+  assert.ok(h.missing > h.resolved, 'majority of refs are missing')
+}
+
+// 6. A coherent clip — mutations address nodes from its own snapshot — is playable.
+{
+  const good: RREvent[] = [e(META, 0), snapEvent([1, 2, 3, 4], 0), mutation([2, 3], 10), mutation([4], 20)]
+  const h = clipHealth(good)
+  assert.equal(h.playable, true, 'resolvable mutations → playable')
+  assert.equal(h.missing, 0)
+}
+
+// 7. Nodes introduced by a mutation become addressable for later mutations (adds then edit).
+{
+  const withAdds: RREvent[] = [
+    e(META, 0),
+    snapEvent([1, 2], 0),
+    { type: INC, timestamp: 5, data: { source: 0, adds: [{ parentId: 2, node: { id: 50, childNodes: [] } }], texts: [], attributes: [], removes: [] } },
+    mutation([50], 10),
+  ]
+  assert.equal(clipHealth(withAdds).playable, true, 'ids created mid-clip resolve for later mutations')
+}
+
+// 8. A clip that does not boot (no Meta+FullSnapshot head) is rejected outright.
+{
+  assert.equal(clipHealth([e(INC, 1), e(INC, 2)]).reason, 'no_boot_frame')
+  assert.equal(clipHealth([]).reason, 'empty')
+}
+
+// 9. spanSeconds reports the wall span of a clip.
+{
+  assert.equal(spanSeconds([e(META, 1000), e(INC, 4000)]), 3)
+  assert.equal(spanSeconds([e(META, 1000)]), 0, 'single event → no span')
 }
 
 console.log('extension: replay buffer tests passed ✓')

@@ -1,6 +1,9 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
+// Subpath import: this is a client bundle, so pull only the dependency-free health check rather than the whole
+// core barrel (which drags the capture chain and its Node-style .js specifiers into webpack).
+import { replayHealth, type ReplayEvent } from '@th/core/replay-health'
 import 'rrweb/dist/style.css'
 
 // Replays the captured rrweb DOM stream — the human half of the "last 2 minutes". Uses rrweb's Replayer
@@ -33,6 +36,7 @@ export default function ReplayPlayer({ url }: { url: string }) {
   const [playing, setPlaying] = useState(false)
   const [total, setTotal] = useState(0)
   const [cur, setCur] = useState(0)
+  const [broken, setBroken] = useState(false) // clip whose mutations rrweb will silently drop → frozen frame
 
   // Scale rrweb's recorded-size wrapper down to the panel width (never up past 1×), and set the panel height to
   // match so there's no letterbox or clipping. Uses the recorded dims (dims.current), so it's correct even
@@ -64,6 +68,11 @@ export default function ReplayPlayer({ url }: { url: string }) {
         // the fit correct instead of showing the top-left crop of a 2560px page in a narrow panel.
         const meta = (events as Array<{ type?: number; data?: { width?: number; height?: number } }>).find((e) => e.type === 4)
         dims.current = { w: meta?.data?.width || 1280, h: meta?.data?.height || 720 }
+
+        // Detect the "plays but nothing moves" clip: rrweb drops mutations it can't resolve against the
+        // snapshot, so a stitched clip renders as a still frame with only the cursor moving. Say so plainly
+        // instead of showing a frozen picture the viewer has to diagnose themselves.
+        setBroken(!replayHealth(events as ReplayEvent[]).playable)
 
         const { Replayer } = await import('rrweb')
         if (cancelled || !host.current) return
@@ -161,7 +170,10 @@ export default function ReplayPlayer({ url }: { url: string }) {
             <span className="rct">{fmt(total)}</span>
           </div>
         )}
-        {state === 'ready' && total < 1000 && (
+        {state === 'ready' && broken && (
+          <div className="ctxempty">⚠ Запись повреждена: кадры интерфейса не воспроизводятся (виден только курсор) — снимок и изменения страницы записаны в разные моменты. Переснимите через «🔴 Записать репро» в оверлее.</div>
+        )}
+        {state === 'ready' && !broken && total < 1000 && (
           <div className="ctxempty">Короткая запись — до захвата вкладка почти не записывалась. Для гарантированного клипа используй в оверлее кнопку «🔴 Записать репро» (воспроизведи баг → Стоп). Авто-запись копит историю, пока вкладка открыта (до ~2 мин).</div>
         )}
       </div>
