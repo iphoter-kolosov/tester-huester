@@ -5,7 +5,7 @@ import { buildReport, type ReportType, type Severity } from '@/lib/report'
 import { requestBundle } from '@/lib/bridge'
 import {
   startReplay, snapshotReplay, startExplicitClip, stopExplicitClip, clipSeconds,
-  spanSeconds, REPLAY_BLOCK_CLASS, type RREvent,
+  spanSeconds, recorderDiag, REPLAY_BLOCK_CLASS, type RREvent,
 } from '@/lib/replay'
 
 // The in-page overlay. Lives in a shadow root so the host site's CSS can't touch it. Background hands us a
@@ -296,7 +296,9 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     if (closed) return
     const evs = replaySource()
     const s = spanOf(evs)
-    if (s < 1) { recstEl.className = 'recst warn'; recstEl.textContent = '⚠ записи нет — нажми «Записать репро»' }
+    const diag = recorderDiag()
+    if (s < 1 && diag.lastError) { recstEl.className = 'recst warn'; recstEl.textContent = '⚠ рекордер не запустился на этой странице' }
+    else if (s < 1) { recstEl.className = 'recst warn'; recstEl.textContent = '⚠ записи нет — нажми «Записать репро»' }
     else if (s < 3) { recstEl.className = 'recst warn'; recstEl.textContent = `⚠ короткая (${fmtDur(s)})` }
     else { recstEl.className = 'recst ok'; recstEl.textContent = `🔴 запись ${fmtDur(s)}` }
   }
@@ -486,7 +488,9 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       innerWidth: window.innerWidth,
       innerHeight: window.innerHeight,
       userAgent: navigator.userAgent,
-      context,
+      // Always carry the recorder's self-report, and keep the bundle even when the MAIN-world probe is absent
+      // (a tab that outlived an extension reload) so a context-less report still says WHY it is context-less.
+      context: { ...(context ?? {}), diag: { ...recorderDiag(), bridge: !!context, clipSpan: Math.round(spanOf(replaySource())) } } as typeof context,
       projectId,
     })
     if (!payload.note && !payload.screenshot) { setMsg('Add a note or a screenshot', 'err'); return }

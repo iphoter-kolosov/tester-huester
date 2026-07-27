@@ -27,6 +27,22 @@ const RECORD_OPTS = {
 
 let matrix: RREvent[][] = [[]]
 let stopFn: (() => void) | null = null
+let lastError = '' // why the recorder isn't running, if it isn't — surfaced in the overlay and in the report
+
+// Self-report of the recorder's actual state. Attached to reports so a capture that arrives without a replay
+// explains ITSELF, instead of leaving us to guess from the absence of data.
+export function recorderDiag(): Record<string, unknown> {
+  const flat = matrix.flat()
+  return {
+    recording: !!stopFn,
+    clipRecording: !!clipStopFn,
+    bufferedEvents: flat.length,
+    bufferedSeconds: Math.round(replaySpanSeconds(flat)),
+    segments: matrix.length,
+    clipEvents: clipEvents?.length ?? 0,
+    lastError: lastError || null,
+  }
+}
 
 export function startReplay(): void {
   if (stopFn) return
@@ -49,8 +65,14 @@ export function startReplay(): void {
       ...RECORD_OPTS,
     } as Parameters<typeof record>[0])
     stopFn = (stop as (() => void) | undefined) ?? null
-  } catch {
-    stopFn = null // a hostile page can break instrumentation — never let it break the extension
+    if (!stopFn) lastError = 'rrweb record() returned no stop handle'
+    else lastError = ''
+  } catch (e) {
+    // A hostile/complex page can break instrumentation — never let it break the extension, but never fail
+    // silently either: this string is what tells us why a report came back with no replay.
+    stopFn = null
+    lastError = 'record() threw: ' + String((e as Error)?.message || e).slice(0, 200)
+    console.warn('[th] replay recorder failed to start:', e)
   }
 }
 
@@ -104,8 +126,11 @@ export function startExplicitClip(): boolean {
     } as Parameters<typeof record>[0])
     clipStopFn = (stop as (() => void) | undefined) ?? null
     if (!clipStopFn) throw new Error('recorder did not start')
+    lastError = ''
     return true
-  } catch {
+  } catch (e) {
+    lastError = 'clip record() threw: ' + String((e as Error)?.message || e).slice(0, 200)
+    console.warn('[th] explicit clip recorder failed to start:', e)
     clipEvents = null
     clipStopFn = null
     startReplay() // restore the retrospective buffer

@@ -6,16 +6,18 @@ import type { ReproBundle, ActionStep, ConsoleEntry, NetworkEntry } from '@th/co
 // The repro bundle rendered as tabs. This is the human half of "one capture, two consumers" — the same
 // JSON an AI agent reads over MCP. Kept dependency-light: type-only import from @th/core (erased at build),
 // formatting done locally so the capture lib's browser deps never reach this bundle.
-export default function ReproContext({ context }: { context: ReproBundle }) {
+export default function ReproContext({ context }: { context: ReproBundle & { diag?: Record<string, unknown> } }) {
   const actions = context.actions ?? []
   const cons = context.console ?? []
   const net = context.network ?? []
+  const diag = context.diag
   const tabs = [
     { key: 'steps', label: 'Steps', n: actions.length },
     { key: 'console', label: 'Console', n: cons.length },
     { key: 'network', label: 'Network', n: net.length },
     { key: 'env', label: 'Env', n: 0 },
-  ].filter((t) => t.key === 'env' || t.n > 0)
+    ...(diag ? [{ key: 'diag', label: 'Recorder', n: 0 }] : []),
+  ].filter((t) => t.key === 'env' || t.key === 'diag' || t.n > 0)
   const [tab, setTab] = useState(tabs[0]?.key ?? 'env')
   if (tabs.length === 0) return null
   const errors = cons.filter((c) => c.level === 'error').length
@@ -39,6 +41,7 @@ export default function ReproContext({ context }: { context: ReproBundle }) {
         {tab === 'console' && <ConsoleView rows={cons} />}
         {tab === 'network' && <NetworkView rows={net} />}
         {tab === 'env' && <EnvView env={context.env} />}
+        {tab === 'diag' && <DiagView diag={diag!} />}
       </div>
     </div>
   )
@@ -85,6 +88,31 @@ function NetworkView({ rows }: { rows: NetworkEntry[] }) {
         ))}
       </tbody>
     </table>
+  )
+}
+
+// The extension's recorder self-report: whether rrweb was running, how much it held, and any start-up error.
+// This is what turns "the replay is missing" from a guess into a fact.
+function DiagView({ diag }: { diag: Record<string, unknown> }) {
+  const rows: [string, string][] = [
+    ['Рекордер запущен', String(diag.recording ?? '—')],
+    ['Явная запись шла', String(diag.clipRecording ?? '—')],
+    ['Событий в буфере', String(diag.bufferedEvents ?? '—')],
+    ['Секунд в буфере', String(diag.bufferedSeconds ?? '—')],
+    ['Событий явного клипа', String(diag.clipEvents ?? '—')],
+    ['Длина прикреплённого', diag.clipSpan != null ? `${diag.clipSpan}с` : '—'],
+    ['MAIN-world мост', String(diag.bridge ?? '—')],
+    ['Ошибка старта', diag.lastError ? String(diag.lastError) : 'нет'],
+  ]
+  return (
+    <div className="dmeta" style={{ padding: '12px 16px' }}>
+      {rows.map(([k, v]) => (
+        <span key={k} style={{ display: 'contents' }}>
+          <span className="k">{k}</span>
+          <span>{v}</span>
+        </span>
+      ))}
+    </div>
   )
 }
 

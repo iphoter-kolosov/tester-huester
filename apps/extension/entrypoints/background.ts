@@ -5,12 +5,25 @@ export default defineBackground(() => {
   // Send TH_OPEN to the tab's content script. If it isn't there (the tab was opened BEFORE the extension
   // loaded, so the declarative content script never ran), inject it on demand and retry — capture then works
   // on any already-open tab without a manual page reload.
+  // Both halves of the capture pair must be injected: the ISOLATED overlay/recorder (content.js) and the
+  // MAIN-world probe (inpage.js) that owns the page's real console/fetch/XHR and the user's action trail.
+  // Injecting only content.js yields reports with a screenshot but no repro context — which is exactly what a
+  // tab that outlived an extension reload produced.
+  async function injectPair(tabId: number) {
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['content-scripts/content.js'] })
+    try {
+      await chrome.scripting.executeScript({ target: { tabId }, world: 'MAIN', files: ['content-scripts/inpage.js'] })
+    } catch (e) {
+      console.warn('[th] MAIN-world probe injection failed (repro context will be missing):', e)
+    }
+  }
+
   async function openOverlay(tabId: number, shot: string) {
     try {
       await chrome.tabs.sendMessage(tabId, { type: 'TH_OPEN', shot })
     } catch {
       try {
-        await chrome.scripting.executeScript({ target: { tabId }, files: ['content-scripts/content.js'] })
+        await injectPair(tabId)
         await chrome.tabs.sendMessage(tabId, { type: 'TH_OPEN', shot })
       } catch (e) {
         console.warn('[th] could not open the overlay on this tab (a restricted page like the New Tab, the Web Store, or brave://* cannot be captured):', e)
@@ -51,7 +64,7 @@ export default defineBackground(() => {
       tabs.map(async (t) => {
         if (t.id == null) return
         try {
-          await chrome.scripting.executeScript({ target: { tabId: t.id }, files: ['content-scripts/content.js'] })
+          await injectPair(t.id)
         } catch {
           // restricted tabs (Web Store, chrome://, PDF viewer, …) can't be injected — skip silently
         }

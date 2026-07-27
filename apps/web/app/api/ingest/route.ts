@@ -33,13 +33,16 @@ function sanitizeContext(v: unknown): Record<string, unknown> | null {
     network: arr(c.network, 200),
     actions: arr(c.actions, 100),
     capturedAt: typeof c.capturedAt === 'number' ? c.capturedAt : undefined,
+    // The extension's recorder self-report. Kept even when everything else is empty: a report that arrives
+    // without a replay must still be able to say why.
+    diag: c.diag && typeof c.diag === 'object' && !Array.isArray(c.diag) ? c.diag : undefined,
   }
   try {
     if (JSON.stringify(out).length > 512_000) return null
   } catch {
     return null
   }
-  const hasSignal = out.env || (out.console as unknown[]).length || (out.network as unknown[]).length || (out.actions as unknown[]).length
+  const hasSignal = out.env || out.diag || (out.console as unknown[]).length || (out.network as unknown[]).length || (out.actions as unknown[]).length
   return hasSignal ? out : null
 }
 
