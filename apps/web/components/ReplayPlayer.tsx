@@ -27,6 +27,8 @@ export default function ReplayPlayer({ url }: { url: string }) {
   const host = useRef<HTMLDivElement>(null)
   const rep = useRef<Replayerish | null>(null)
   const dims = useRef<{ w: number; h: number }>({ w: 1280, h: 720 }) // recorded viewport (from the Meta event)
+  const trimRef = useRef<{ from: number; to: number } | null>(null) // stretch chosen in the extension's editor
+  const offsetRef = useRef(0) // ms into the stored clip where the selection starts
   const ro = useRef<ResizeObserver | null>(null)
   const timer = useRef<ReturnType<typeof setInterval> | null>(null) // setInterval, not rAF — rAF pauses when the tab is hidden
   const startWall = useRef(0) // performance.now() when the current play began
@@ -58,8 +60,11 @@ export default function ReplayPlayer({ url }: { url: string }) {
       try {
         const res = await fetch(url)
         if (!res.ok) throw new Error(`fetch ${res.status}`)
-        const data = (await res.json()) as { events?: unknown[] }
+        const data = (await res.json()) as { events?: unknown[]; trim?: { from: number; to: number } }
         const events = data.events ?? []
+        // The tester trimmed this in the extension's editor: play only the stretch they chose. The clip may
+        // physically start earlier (it must open on a snapshot), so `trim` is the offset into it.
+        trimRef.current = data.trim ?? null
         if (cancelled) return
         if (events.length < 2) return setState('empty')
 
@@ -79,13 +84,18 @@ export default function ReplayPlayer({ url }: { url: string }) {
         host.current.innerHTML = ''
         const replayer = new Replayer(events as never, { root: host.current, skipInactive: true, mouseTail: false }) as unknown as Replayerish
         rep.current = replayer
-        replayer.pause(0) // first frame, paused
         // getMetaData().totalTime is unreliable in this rrweb build (often 0) — derive duration from the event
         // timestamps, which are ground truth. (A near-zero span means recording only started at capture time,
         // e.g. on a tab that was open before the extension loaded — see the hint below.)
         const first = (events[0] as { timestamp?: number })?.timestamp ?? 0
         const last = (events[events.length - 1] as { timestamp?: number })?.timestamp ?? first
-        const t = Math.max(replayer.getMetaData().totalTime || 0, last - first)
+        const raw = Math.max(replayer.getMetaData().totalTime || 0, last - first)
+        // A trimmed clip plays only its chosen stretch: the scrubber spans the selection, and every play/pause
+        // offset is shifted into the underlying clip by `offsetRef`.
+        const tr = trimRef.current
+        offsetRef.current = tr ? Math.max(0, tr.from * 1000) : 0
+        const t = tr ? Math.max(0, Math.min(raw - offsetRef.current, (tr.to - tr.from) * 1000)) : raw
+        replayer.pause(offsetRef.current) // first frame of the selection, paused
         totalRef.current = t
         setTotal(t)
         replayer.on('finish', () => {
@@ -125,7 +135,7 @@ export default function ReplayPlayer({ url }: { url: string }) {
       if (timer.current) clearInterval(timer.current)
       setCur(totalRef.current)
       setPlaying(false)
-      rep.current?.pause(totalRef.current)
+      rep.current?.pause(totalRef.current + offsetRef.current)
       return
     }
     setCur(elapsed)
@@ -135,7 +145,7 @@ export default function ReplayPlayer({ url }: { url: string }) {
     if (!r) return
     startOffset.current = from
     startWall.current = performance.now()
-    r.play(from)
+    r.play(from + offsetRef.current)
     setPlaying(true)
     if (timer.current) clearInterval(timer.current)
     timer.current = setInterval(tick, 100)
@@ -149,14 +159,16 @@ export default function ReplayPlayer({ url }: { url: string }) {
   const seek = (ms: number) => {
     setCur(ms)
     if (playing) play(ms)
-    else rep.current?.pause(ms)
+    else rep.current?.pause(ms + offsetRef.current)
   }
 
   return (
     <div className="replay">
       <div className="replayhead">
         <span className="ctxttl">▶ Session replay</span>
-        <span className="replaymeta">last ~2 min · inputs masked{state === 'loading' ? ' · loading…' : ''}</span>
+        <span className="replaymeta">
+          {trimRef.current ? 'отрезок выбран автором' : 'last ~2 min'} · inputs masked{state === 'loading' ? ' · loading…' : ''}
+        </span>
       </div>
       {state === 'empty' && <div className="ctxempty">Replay was captured but has no playable frames.</div>}
       {state === 'error' && <div className="ctxempty">Could not load the replay.</div>}

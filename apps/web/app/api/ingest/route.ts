@@ -102,8 +102,16 @@ export async function POST(req: Request) {
     replayEvents = body.replay
   }
   if (replayEvents && replayEvents.length > 1) {
+    // `trim` is the stretch the tester selected in the editor. The clip physically starts at the checkpoint
+    // at/before that point (a clip must open on a snapshot), so the player uses this to show exactly what was
+    // chosen — no lead-in the tester already decided to cut.
+    const t = body.replayTrim as { from?: unknown; to?: unknown } | undefined
+    const trim =
+      t && typeof t.from === 'number' && typeof t.to === 'number' && t.to > t.from
+        ? { from: Math.max(0, t.from), to: t.to }
+        : undefined
     try {
-      replayUrl = await storage.putJson({ events: replayEvents })
+      replayUrl = await storage.putJson(trim ? { events: replayEvents, trim } : { events: replayEvents })
     } catch (e) {
       console.warn('ingest: replay store failed:', e)
     }

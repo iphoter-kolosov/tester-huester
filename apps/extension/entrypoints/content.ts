@@ -115,16 +115,45 @@ const CSS = `
 .recst { font-size: 11.5px; font-weight: 800; white-space: nowrap; }
 .recst.ok { color: #34d399; }
 .recst.warn { color: #fbbf24; }
-.clip { display: none; align-items: center; gap: 10px; flex-wrap: wrap; padding: 8px 10px; border: 1px solid #223049; border-radius: 10px; background: #0f1626; }
+/* "attach the recording?" strip on the main screen */
+.clip { display: none; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 12px; border: 1px solid #223049; border-radius: 10px; background: #0f1626; }
 .clip.on { display: flex; }
-.clipchk { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 700; cursor: pointer; user-select: none; }
-.clipchk input { width: 15px; height: 15px; accent-color: #0a84ff; cursor: pointer; }
-.cliprng { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 260px; }
-.cliprng input[type=range] { flex: 1; accent-color: #0a84ff; cursor: pointer; min-width: 90px; }
-.cliplbl { font-size: 11px; font-weight: 800; color: #8ea0bd; font-variant-numeric: tabular-nums; white-space: nowrap; }
-.clipsum { font-size: 11.5px; font-weight: 700; color: #e6edf7; white-space: nowrap; }
-.clipsum b { color: #38bdf8; }
-.clipoff { color: #8ea0bd; font-size: 11.5px; font-weight: 700; }
+.clipq { font-size: 12.5px; font-weight: 700; }
+.clipq b { color: #38bdf8; }
+.clipst { font-size: 12px; font-weight: 700; color: #34d399; }
+.clipst.off { color: #8ea0bd; }
+.clipbtns { display: inline-flex; gap: 6px; margin-left: auto; }
+.clipb2 { height: 30px; padding: 0 12px; border: 1px solid #223049; background: #131a2b; color: #e6edf7; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.clipb2:hover { border-color: #38bdf8; }
+.clipb2.pri { border-color: #0a84ff; background: #0a84ff; color: #fff; }
+
+/* the trim editor: a real player with in/out marks, shown INSTEAD of the annotation screen (same card, so the
+   tester never loses the report they were writing) */
+.card.editing > *:not(.head):not(.ed) { display: none; }
+.ed { display: none; flex-direction: column; gap: 10px; }
+.card.editing .ed { display: flex; }
+.edhead { display: flex; align-items: center; gap: 10px; }
+.edttl { font-weight: 800; }
+.edhint { font-size: 11.5px; color: #8ea0bd; font-weight: 700; }
+.edstage { position: relative; background: #fff; border: 1px solid #223049; border-radius: 10px; overflow: hidden; max-height: 62vh; }
+.edstage .replayer-wrapper { position: relative; transform-origin: top left; }
+.edstage iframe { border: 0; background: #fff; }
+/* rrweb's own stylesheet lives outside this shadow root, so the replayed cursor needs re-declaring here. */
+.edstage .replayer-mouse { position: absolute; width: 20px; height: 20px; margin: -10px 0 0 -10px; border-radius: 50%; background: rgba(10,132,255,.35); border: 2px solid #0a84ff; box-shadow: 0 0 0 2px rgba(255,255,255,.6); transition: left .12s linear, top .12s linear; z-index: 3; pointer-events: none; }
+.edstage .replayer-mouse.active::after { content: ''; position: absolute; inset: -6px; border: 2px solid #0a84ff; border-radius: 50%; animation: thclick .3s ease-out; }
+@keyframes thclick { from { transform: scale(.4); opacity: 1 } to { transform: scale(1.4); opacity: 0 } }
+.edbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.edplay { width: 42px; height: 34px; border: 1px solid #223049; background: #0f1626; color: #e6edf7; border-radius: 9px; font-size: 14px; cursor: pointer; }
+.edplay:hover { border-color: #38bdf8; }
+.edt { font-size: 12px; font-weight: 800; color: #8ea0bd; font-variant-numeric: tabular-nums; min-width: 40px; }
+.edtrack { position: relative; flex: 1; min-width: 220px; height: 34px; display: flex; align-items: center; }
+.edsel { position: absolute; top: 9px; height: 16px; background: rgba(10,132,255,.28); border-left: 2px solid #0a84ff; border-right: 2px solid #0a84ff; pointer-events: none; border-radius: 2px; }
+.edseek { width: 100%; accent-color: #38bdf8; cursor: pointer; }
+.edmark { height: 30px; padding: 0 11px; border: 1px solid #223049; background: #0f1626; color: #e6edf7; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.edmark:hover { border-color: #0a84ff; }
+.edsum { font-size: 12px; font-weight: 700; color: #e6edf7; white-space: nowrap; }
+.edsum b { color: #38bdf8; }
+.edfoot { display: flex; align-items: center; gap: 10px; }
 .btn.rec { margin-left: auto; border-color: #b91c1c; color: #fca5a5; }
 .btn.rec:hover { border-color: #ef4444; color: #fff; }
 `
@@ -208,14 +237,13 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
           <span class="khint"><b>Ctrl+Enter</b> отправить · <b>Esc</b> закрыть</span>
         </div>
         <div class="clip">
-          <label class="clipchk"><input type="checkbox" class="clipon" checked /> Приложить запись</label>
-          <span class="cliprng">
-            <span class="cliplbl">от <span class="clipfrom">0:00</span></span>
-            <input type="range" class="clipa" min="0" max="100" value="0" />
-            <input type="range" class="clipb" min="0" max="100" value="100" />
-            <span class="cliplbl">до <span class="clipto">0:00</span></span>
+          <span class="clipq"></span>
+          <span class="clipst"></span>
+          <span class="clipbtns">
+            <button class="clipb2 pri" data-clip="edit">✂ Открыть редактор</button>
+            <button class="clipb2" data-clip="all">Прикрепить целиком</button>
+            <button class="clipb2" data-clip="none">Не прикреплять</button>
           </span>
-          <span class="clipsum"></span>
         </div>
         <textarea class="note" placeholder="What's wrong here?"></textarea>
         <div class="foot">
@@ -223,6 +251,33 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
           <button class="btn ghost rec" title="Записать репро: свернуть окно, воспроизвести баг, ⏹ Стоп — клип прикрепится">🔴 Записать репро</button>
           <button class="btn ghost cancel">Cancel</button>
           <button class="btn send">Send</button>
+        </div>
+
+        <div class="ed">
+          <div class="edhead">
+            <span class="edttl">✂ Обрезка записи</span>
+            <span class="edhint">Проигрывайте запись и отметьте начало и конец нужного отрезка</span>
+          </div>
+          <div class="edstage"></div>
+          <div class="edbar">
+            <button class="edplay">▶</button>
+            <span class="edt edcur">0:00</span>
+            <span class="edtrack"><span class="edsel"></span><input type="range" class="edseek" min="0" max="1000" value="0" /></span>
+            <span class="edt edtot">0:00</span>
+          </div>
+          <div class="edbar">
+            <button class="edmark" data-ed="in">[ Начало здесь</button>
+            <button class="edmark" data-ed="out">Конец здесь ]</button>
+            <button class="edmark" data-ed="preview">▶ Просмотр отрезка</button>
+            <button class="edmark" data-ed="reset">Сброс</button>
+            <span class="edsum"></span>
+          </div>
+          <div class="edfoot">
+            <button class="btn ghost" data-ed="cancel">← Назад</button>
+            <span class="sep"></span>
+            <button class="btn ghost" data-ed="drop">Не прикреплять</button>
+            <button class="btn" data-ed="save">Прикрепить отрезок</button>
+          </div>
         </div>
       </div>
       <div class="tmark"></div>
@@ -256,12 +311,16 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   const recBtn = q<HTMLButtonElement>('.rec')
   const recstEl = q<HTMLElement>('.recst')
   const clipBox = q<HTMLElement>('.clip')
-  const clipOn = q<HTMLInputElement>('.clipon')
-  const clipA = q<HTMLInputElement>('.clipa')
-  const clipB = q<HTMLInputElement>('.clipb')
-  const clipFrom = q<HTMLElement>('.clipfrom')
-  const clipTo = q<HTMLElement>('.clipto')
-  const clipSum = q<HTMLElement>('.clipsum')
+  const clipQ = q<HTMLElement>('.clipq')
+  const clipSt = q<HTMLElement>('.clipst')
+  const card = q<HTMLElement>('.card')
+  const edStage = q<HTMLElement>('.edstage')
+  const edPlay = q<HTMLButtonElement>('.edplay')
+  const edSeek = q<HTMLInputElement>('.edseek')
+  const edSel = q<HTMLElement>('.edsel')
+  const edCur = q<HTMLElement>('.edcur')
+  const edTot = q<HTMLElement>('.edtot')
+  const edSum = q<HTMLElement>('.edsum')
 
   // Form state (shared with track A via the exact field names note/type/severity).
   let type: ReportType = 'bug'
@@ -346,22 +405,25 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     else if (s < 3) { recstEl.className = 'recst warn'; recstEl.textContent = `⚠ короткая (${fmtDur(s)})` }
     else { recstEl.className = 'recst ok'; recstEl.textContent = `🔴 запись ${fmtDur(s)}` }
   }
-  // ── Attach-the-recording panel ───────────────────────────────────────────────────────────────────────
-  // A long clip is mostly lead-up the reader doesn't need, so the tester decides what actually ships: attach
-  // it or not, and which stretch. The action trail always goes regardless — it is small and is what an agent
-  // reads. The left handle snaps to a recording checkpoint (the only points a clip can legally start from).
+  // ── Attach-the-recording decision + trim editor ──────────────────────────────────────────────────────
+  // The tester is ASKED whether the recording should ride along, and can cut it while WATCHING it — blind
+  // sliders told them nothing about what they were keeping. The action trail always ships regardless: it is
+  // small and it is what an agent actually reads.
   const fmtT = (s: number) => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`
   const kb = (n: number) => (n >= 1e6 ? `${(n / 1e6).toFixed(1)} МБ` : `${Math.max(1, Math.round(n / 1024))} КБ`)
 
-  // The exact events the Send button will attach, honouring the checkbox and the two handles.
-  function selectedClip(): RREvent[] {
-    if (!clipOn.checked) return []
+  let attach = true // send the recording at all?
+  let trim: { from: number; to: number } | null = null // chosen stretch (seconds from clip start), null = whole
+
+  // The exact events Send will attach. Physically the clip starts at the checkpoint at/before `from` (a clip
+  // must open on a snapshot); `replayTrim` rides alongside so the dashboard plays exactly the chosen stretch.
+  function selectedClip(): { events: RREvent[]; trim?: { from: number; to: number } } {
+    if (!attach) return { events: [] }
     const evs = replaySource()
     const total = spanOf(evs)
-    if (total < 1) return evs
-    const a = (Number(clipA.value) / 100) * total
-    const b = (Number(clipB.value) / 100) * total
-    return trimClip(evs, Math.min(a, b), Math.max(a, b)).events
+    if (!trim || total < 1) return { events: evs }
+    const res = trimClip(evs, trim.from, trim.to)
+    return { events: res.events, trim: { from: Math.max(0, trim.from - res.from), to: Math.max(0, trim.to - res.from) } }
   }
 
   function updateClipPanel() {
@@ -369,31 +431,149 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     const total = spanOf(evs)
     if (total < 1) { clipBox.classList.remove('on'); return }
     clipBox.classList.add('on')
-
-    const on = clipOn.checked
-    clipA.disabled = !on
-    clipB.disabled = !on
-    if (!on) {
-      clipFrom.textContent = '—'
-      clipTo.textContent = '—'
-      clipSum.innerHTML = `<span class="clipoff">запись не отправится · слепок действий приложится</span>`
-      return
+    clipQ.innerHTML = `🎬 Есть запись <b>${fmtT(total)}</b> — приложить к тикету?`
+    if (!attach) {
+      clipSt.className = 'clipst off'
+      clipSt.textContent = 'не прикладывается'
+    } else {
+      const sel = selectedClip()
+      const dur = trim ? Math.max(0, trim.to - trim.from) : total
+      clipSt.className = 'clipst'
+      clipSt.textContent = `приложится ${fmtT(dur)}${trim ? ` (${fmtT(trim.from)}–${fmtT(trim.to)})` : ' целиком'} · ~${kb(JSON.stringify(sel.events).length / 6)}`
     }
-    const a = (Number(clipA.value) / 100) * total
-    const b = (Number(clipB.value) / 100) * total
-    const res = trimClip(evs, Math.min(a, b), Math.max(a, b))
-    clipFrom.textContent = fmtT(res.from) // the snapped-back checkpoint, i.e. what will really be sent
-    clipTo.textContent = fmtT(res.to)
-    const raw = JSON.stringify(res.events).length
-    const dur = Math.max(0, res.to - res.from)
-    const pts = trimPoints(evs).length
-    clipSum.innerHTML =
-      `<b>${fmtT(dur)}</b> из ${fmtT(total)} · ~${kb(raw / 6)} (сжато)` +
-      (pts > 1 ? '' : ' · шаг начала — 30с')
   }
 
-  for (const el of [clipA, clipB]) el.addEventListener('input', updateClipPanel)
-  clipOn.addEventListener('change', updateClipPanel)
+  root.querySelectorAll('[data-clip]').forEach((el) =>
+    el.addEventListener('click', () => {
+      const act = (el as HTMLElement).dataset.clip
+      if (act === 'none') { attach = false; trim = null; updateClipPanel() }
+      else if (act === 'all') { attach = true; trim = null; updateClipPanel() }
+      else if (act === 'edit') void openEditor()
+    }),
+  )
+
+  // ── the editor ───────────────────────────────────────────────────────────────────────────────────────
+  type Replayerish = {
+    play: (offset?: number) => void
+    pause: (offset?: number) => void
+    destroy?: () => void
+    getMetaData: () => { totalTime: number }
+  }
+  let rep: Replayerish | null = null
+  let edTimer: ReturnType<typeof setInterval> | null = null
+  let edTotal = 0
+  let edIn = 0
+  let edOut = 0
+  let edPlaying = false
+  let edStartWall = 0
+  let edStartOff = 0
+  let edPreviewTo = 0 // when previewing the selection, stop here
+
+  const edPos = () => (edPlaying ? Math.min(edTotal, edStartOff + (performance.now() - edStartWall) / 1000) : Number(edSeek.value) / 1000 * edTotal)
+
+  function edPaint() {
+    const pos = edPos()
+    edSeek.value = String(edTotal ? Math.round((pos / edTotal) * 1000) : 0)
+    edCur.textContent = fmtT(pos)
+    edTot.textContent = fmtT(edTotal)
+    const l = edTotal ? (edIn / edTotal) * 100 : 0
+    const w = edTotal ? ((edOut - edIn) / edTotal) * 100 : 100
+    edSel.style.left = `calc(${l}% )`
+    edSel.style.width = `calc(${w}% )`
+    edSum.innerHTML = `отрезок <b>${fmtT(edIn)} – ${fmtT(edOut)}</b> · ${fmtT(Math.max(0, edOut - edIn))}`
+  }
+
+  function edSeekTo(sec: number, keepPlaying = false) {
+    const s = Math.max(0, Math.min(edTotal, sec))
+    if (keepPlaying && edPlaying) { edStartOff = s; edStartWall = performance.now(); rep?.play(s * 1000) }
+    else { edPlaying = false; edPlay.textContent = '▶'; rep?.pause(s * 1000); edSeek.value = String(edTotal ? Math.round((s / edTotal) * 1000) : 0) }
+    edPaint()
+  }
+
+  function edToggle(from?: number, until?: number) {
+    if (edPlaying) { edPlaying = false; edPlay.textContent = '▶'; rep?.pause(edPos() * 1000); return }
+    const start = from ?? (edPos() >= edTotal - 0.15 ? 0 : edPos())
+    edPreviewTo = until ?? 0
+    edStartOff = start
+    edStartWall = performance.now()
+    edPlaying = true
+    edPlay.textContent = '⏸'
+    rep?.play(start * 1000)
+  }
+
+  async function openEditor() {
+    const evs = replaySource()
+    if (spanOf(evs) < 1) return
+    attach = true
+    card.classList.add('editing')
+    document.removeEventListener('keydown', onKey, true) // the editor owns the keyboard while it is open
+
+    edTotal = spanOf(evs)
+    edIn = trim ? trim.from : 0
+    edOut = trim ? trim.to : edTotal
+    edStage.innerHTML = ''
+    setMsg('')
+
+    try {
+      const { Replayer } = await import('rrweb')
+      rep = new Replayer(evs as never, { root: edStage, skipInactive: false, mouseTail: false }) as unknown as Replayerish
+      rep.pause(0)
+      // rrweb renders at the recorded viewport; scale it into the editor stage.
+      const meta = evs.find((e) => e.type === 4) as { data?: { width?: number; height?: number } } | undefined
+      const w = meta?.data?.width || 1280
+      const h = meta?.data?.height || 720
+      const wrap = edStage.querySelector('.replayer-wrapper') as HTMLElement | null
+      const fit = () => {
+        if (!wrap) return
+        const scale = Math.min(1, (edStage.clientWidth || 900) / w)
+        wrap.style.transform = `scale(${scale})`
+        edStage.style.height = `${Math.round(h * scale)}px`
+      }
+      fit()
+      edPaint()
+      if (edTimer) clearInterval(edTimer)
+      edTimer = setInterval(() => {
+        if (!edPlaying) return
+        const pos = edPos()
+        if ((edPreviewTo && pos >= edPreviewTo) || pos >= edTotal) { edPlaying = false; edPlay.textContent = '▶'; rep?.pause((edPreviewTo || edTotal) * 1000); edPreviewTo = 0 }
+        edPaint()
+      }, 100)
+    } catch (e) {
+      setMsg('Не удалось открыть редактор: ' + String(e), 'err')
+      closeEditor()
+    }
+  }
+
+  function closeEditor() {
+    if (edTimer) { clearInterval(edTimer); edTimer = null }
+    edPlaying = false
+    try { rep?.pause(); rep?.destroy?.() } catch {}
+    rep = null
+    edStage.innerHTML = ''
+    card.classList.remove('editing')
+    document.addEventListener('keydown', onKey, true)
+    updateClipPanel()
+  }
+
+  edPlay.addEventListener('click', () => edToggle())
+  edSeek.addEventListener('input', () => edSeekTo((Number(edSeek.value) / 1000) * edTotal, true))
+  root.querySelectorAll('[data-ed]').forEach((el) =>
+    el.addEventListener('click', () => {
+      const act = (el as HTMLElement).dataset.ed
+      if (act === 'in') { edIn = Math.min(edPos(), edOut - 0.5); edPaint() }
+      else if (act === 'out') { edOut = Math.max(edPos(), edIn + 0.5); edPaint() }
+      else if (act === 'preview') { edSeekTo(edIn); edToggle(edIn, edOut) }
+      else if (act === 'reset') { edIn = 0; edOut = edTotal; edPaint() }
+      else if (act === 'cancel') closeEditor()
+      else if (act === 'drop') { attach = false; trim = null; closeEditor() }
+      else if (act === 'save') {
+        attach = true
+        trim = edIn <= 0.2 && edOut >= edTotal - 0.2 ? null : { from: edIn, to: edOut }
+        closeEditor()
+        setMsg(trim ? `Отрезок ${fmtT(trim.from)}–${fmtT(trim.to)} прикреплён ✓` : 'Запись прикреплена целиком ✓', 'ok')
+      }
+    }),
+  )
 
   updateRec()
   updateClipPanel()
@@ -542,9 +722,9 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       host.style.display = ''
       document.addEventListener('keydown', onKey, true)
       // A fresh clip resets the trim to "all of it" — the tester narrows down from there if they want to.
-      clipOn.checked = true
-      clipA.value = '0'
-      clipB.value = '100'
+      // A fresh clip supersedes any previous choice: attach it whole until the tester says otherwise.
+      attach = true
+      trim = null
       updateRec()
       updateClipPanel()
 
@@ -603,7 +783,8 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       // The clip is the payload's bulk: a minute of a dense admin UI serialises to several MB, which the old
       // 4 MB cut-off silently discarded. Gzip it (rrweb JSON compresses ~10x) and send the compressed blob;
       // only a clip that is still oversized AFTER compression is dropped — and then it is said out loud.
-      const replay = selectedClip() // what the tester chose to attach (possibly nothing, possibly a trim)
+      const sel = selectedClip() // what the tester chose to attach (possibly nothing, possibly a trim)
+      const replay = sel.events
       let replayPayload: RREvent[] | undefined
       let replayGz: string | undefined
       let replayWarn = ''
@@ -620,13 +801,13 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       const res = await chrome.runtime.sendMessage({
         type: 'TH_SEND',
         collectorUrl: cfg.collectorUrl,
-        payload: { ...payload, replay: replayPayload, replayGz, replayEvents: replay.length, replayBytes },
+        payload: { ...payload, replay: replayPayload, replayGz, replayEvents: replay.length, replayBytes, replayTrim: sel.trim },
       })
       if (res?.ok) {
         // Never let a green "sent" paper over a dropped recording — the tester must know what actually landed.
         if (replayWarn) setMsg(`Отправлено, но ${replayWarn}`, 'warn')
-        else if (replayGz || replayPayload) setMsg(`Отправлено ✓ (запись ${fmtDur(spanOf(replay))})`, 'ok')
-        else setMsg(clipOn.checked ? 'Отправлено ✓ (без записи)' : 'Отправлено ✓ (запись не приложена — по вашему выбору)', 'ok')
+        else if (replayGz || replayPayload) setMsg(`Отправлено ✓ (запись ${fmtDur(sel.trim ? sel.trim.to - sel.trim.from : spanOf(replay))})`, 'ok')
+        else setMsg(attach ? 'Отправлено ✓ (без записи)' : 'Отправлено ✓ (запись не приложена — по вашему выбору)', 'ok')
         setTimeout(close, replayWarn ? 2600 : 1100)
       } else { setMsg('Failed: ' + (res?.error || 'server error'), 'err'); sendBtn.disabled = false }
     } catch (e) {
