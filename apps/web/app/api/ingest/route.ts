@@ -85,15 +85,39 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: 'empty' }, { status: 400, headers: CORS })
   }
 
-  // The rrweb replay is large → store it as its own blob and keep only a URL on the report.
+  // The rrweb replay is large → store it as its own blob and keep only a URL on the report. The extension
+  // sends it gzip+base64 (`replayGz`) because a minute of a dense UI is several MB uncompressed; `replay`
+  // (plain array) stays supported for older builds and for browsers without CompressionStream.
   let replayUrl: string | null = null
-  const replay = body.replay
-  if (Array.isArray(replay) && replay.length > 1) {
+  let replayEvents: unknown[] | null = null
+  if (typeof body.replayGz === 'string' && body.replayGz.length > 0) {
     try {
-      replayUrl = await storage.putJson({ events: replay })
+      const { gunzipSync } = await import('node:zlib')
+      const parsed = JSON.parse(gunzipSync(Buffer.from(body.replayGz, 'base64')).toString('utf8'))
+      if (Array.isArray(parsed)) replayEvents = parsed
+    } catch (e) {
+      console.warn('ingest: replay decompress failed:', e)
+    }
+  } else if (Array.isArray(body.replay)) {
+    replayEvents = body.replay
+  }
+  if (replayEvents && replayEvents.length > 1) {
+    try {
+      replayUrl = await storage.putJson({ events: replayEvents })
     } catch (e) {
       console.warn('ingest: replay store failed:', e)
     }
+  }
+
+  // Record what the SERVER actually received, next to what the extension reported sending. When a replay goes
+  // missing, these two halves together say whether it was never sent, arrived broken, or failed to store.
+  const context = sanitizeContext(body.context)
+  if (context && context.diag && typeof context.diag === 'object') {
+    Object.assign(context.diag as Record<string, unknown>, {
+      received: replayEvents ? replayEvents.length : 0,
+      compressed: typeof body.replayGz === 'string' ? body.replayGz.length : 0,
+      stored: !!replayUrl,
+    })
   }
 
   const row = repo.createReport({
@@ -104,7 +128,7 @@ export async function POST(req: Request) {
     viewport: clip(body.viewport, 40),
     userAgent: clip(body.userAgent, 500),
     reporter: clip(body.reporter, 200),
-    context: sanitizeContext(body.context),
+    context,
     replayUrl,
     type: asType(body.type),
     severity: asSeverity(body.severity),

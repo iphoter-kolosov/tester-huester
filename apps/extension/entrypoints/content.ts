@@ -132,6 +132,23 @@ const BAR_CSS = `
 .stop:hover { background: #dc2626; }
 `
 
+// Gzip a string to base64 using the platform's CompressionStream (Chrome 80+). Returns '' when unavailable or
+// on failure, so the caller can fall back to the uncompressed path rather than losing the recording.
+async function gzipToBase64(s: string): Promise<string> {
+  try {
+    const CS = (globalThis as { CompressionStream?: new (f: string) => GenericTransformStream }).CompressionStream
+    if (!CS) return ''
+    const stream = new Blob([s]).stream().pipeThrough(new CS('gzip'))
+    const buf = new Uint8Array(await new Response(stream).arrayBuffer())
+    let bin = ''
+    const CHUNK = 0x8000 // chunked to avoid blowing the argument limit on multi-MB clips
+    for (let i = 0; i < buf.length; i += CHUNK) bin += String.fromCharCode(...buf.subarray(i, i + CHUNK))
+    return btoa(bin)
+  } catch {
+    return ''
+  }
+}
+
 function mount(shot: string, context: ReproBundle | null, getReplay: () => RREvent[], onClose: () => void) {
   // The replay attached to this report. Starts as the auto retrospective (evaluated at send); an explicit
   // "record repro" clip replaces it. Kept as a thunk so auto stays live until the moment of sending.
@@ -501,20 +518,34 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       // in the report row). Evaluated at SEND (auto) or the frozen explicit clip. A clip that wouldn't play or
       // that blows the size cap is dropped — but never silently: the tester is told, because "I recorded it and
       // it isn't there" is the single worst failure this tool can have.
+      // The clip is the payload's bulk: a minute of a dense admin UI serialises to several MB, which the old
+      // 4 MB cut-off silently discarded. Gzip it (rrweb JSON compresses ~10x) and send the compressed blob;
+      // only a clip that is still oversized AFTER compression is dropped — and then it is said out loud.
       const replay = replaySource()
       let replayPayload: RREvent[] | undefined
+      let replayGz: string | undefined
       let replayWarn = ''
+      let replayBytes = 0
       if (replay.length > 1) {
-        const bytes = JSON.stringify(replay).length
-        // Size is the ONLY hard reason to drop a clip (the collector can't store an unbounded blob). Health is
-        // advisory: a heuristic must never be the thing that silently withholds a recording the tester made.
-        if (bytes >= 4_000_000) replayWarn = `запись не приложена (${Math.round(bytes / 1e6)} МБ — слишком большая)`
-        else replayPayload = replay
+        const json = JSON.stringify(replay)
+        replayBytes = json.length
+        const gz = await gzipToBase64(json)
+        if (gz && gz.length < 24_000_000) replayGz = gz
+        else if (!gz && replayBytes < 4_000_000) replayPayload = replay // no CompressionStream → legacy path
+        else replayWarn = `запись не приложена (${Math.round(replayBytes / 1e6)} МБ — слишком большая)`
       }
-      if (replayWarn) setMsg(`Отправка… ⚠ ${replayWarn}`, 'warn')
-      const res = await chrome.runtime.sendMessage({ type: 'TH_SEND', collectorUrl: cfg.collectorUrl, payload: { ...payload, replay: replayPayload } })
-      if (res?.ok) { setMsg('Sent ✓', 'ok'); setTimeout(close, 900) }
-      else { setMsg('Failed: ' + (res?.error || 'server error'), 'err'); sendBtn.disabled = false }
+      if (replayWarn) setMsg(`⚠ ${replayWarn}`, 'warn')
+      const res = await chrome.runtime.sendMessage({
+        type: 'TH_SEND',
+        collectorUrl: cfg.collectorUrl,
+        payload: { ...payload, replay: replayPayload, replayGz, replayEvents: replay.length, replayBytes },
+      })
+      if (res?.ok) {
+        // Never let a green "sent" paper over a dropped recording — the tester must know what actually landed.
+        if (replayWarn) setMsg(`Отправлено, но ${replayWarn}`, 'warn')
+        else setMsg(replayGz || replayPayload ? `Отправлено ✓ (запись ${fmtDur(spanOf(replay))})` : 'Отправлено ✓ (без записи)', 'ok')
+        setTimeout(close, replayWarn ? 2600 : 1100)
+      } else { setMsg('Failed: ' + (res?.error || 'server error'), 'err'); sendBtn.disabled = false }
     } catch (e) {
       setMsg('Failed: ' + String(e), 'err'); sendBtn.disabled = false
     }

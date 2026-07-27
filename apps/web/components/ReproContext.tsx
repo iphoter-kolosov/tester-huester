@@ -103,6 +103,9 @@ function DiagView({ diag }: { diag: Record<string, unknown> }) {
     ['Длина прикреплённого', diag.clipSpan != null ? `${diag.clipSpan}с` : '—'],
     ['MAIN-world мост', String(diag.bridge ?? '—')],
     ['Ошибка старта', diag.lastError ? String(diag.lastError) : 'нет'],
+    ['Получено сервером (событий)', diag.received != null ? String(diag.received) : '—'],
+    ['Сжатый размер', diag.compressed ? `${Math.round(Number(diag.compressed) / 1024)} КБ` : '—'],
+    ['Запись сохранена', diag.stored != null ? String(diag.stored) : '—'],
   ]
   return (
     <div className="dmeta" style={{ padding: '12px 16px' }}>
