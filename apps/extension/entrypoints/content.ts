@@ -135,7 +135,8 @@ const CSS = `
 .edhead { display: flex; align-items: center; gap: 10px; }
 .edttl { font-weight: 800; }
 .edhint { font-size: 11.5px; color: #8ea0bd; font-weight: 700; }
-.edstage { position: relative; background: #fff; border: 1px solid #223049; border-radius: 10px; overflow: hidden; max-height: 62vh; }
+/* size is computed to fit both axes (see edFit) — no max-height here, or the frame would be cropped again */
+.edstage { position: relative; background: #fff; border: 1px solid #223049; border-radius: 10px; overflow: hidden; }
 .edstage .replayer-wrapper { position: relative; transform-origin: top left; }
 .edstage iframe { border: 0; background: #fff; }
 /* rrweb's own stylesheet lives outside this shadow root, so the replayed cursor needs re-declaring here. */
@@ -460,6 +461,7 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     getMetaData: () => { totalTime: number }
   }
   let rep: Replayerish | null = null
+  let edFit: (() => void) | null = null
   let edTimer: ReturnType<typeof setInterval> | null = null
   let edTotal = 0
   let edIn = 0
@@ -523,13 +525,21 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       const w = meta?.data?.width || 1280
       const h = meta?.data?.height || 720
       const wrap = edStage.querySelector('.replayer-wrapper') as HTMLElement | null
-      const fit = () => {
+      // Fit BOTH axes: scaling by width alone let a tall page overflow the stage, so the tester saw only the
+      // top-left part of what they were trimming. The stage is then sized to the scaled frame exactly (and
+      // centred), so there is no dead space and nothing is cropped.
+      edFit = () => {
         if (!wrap) return
-        const scale = Math.min(1, (edStage.clientWidth || 900) / w)
+        const availW = (edStage.parentElement?.clientWidth || edStage.clientWidth || 900) - 2
+        const availH = Math.max(220, window.innerHeight * 0.52)
+        const scale = Math.min(1, availW / w, availH / h)
         wrap.style.transform = `scale(${scale})`
+        edStage.style.width = `${Math.round(w * scale)}px`
         edStage.style.height = `${Math.round(h * scale)}px`
+        edStage.style.margin = '0 auto'
       }
-      fit()
+      edFit()
+      window.addEventListener('resize', edFit)
       edPaint()
       if (edTimer) clearInterval(edTimer)
       edTimer = setInterval(() => {
@@ -546,9 +556,11 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
 
   function closeEditor() {
     if (edTimer) { clearInterval(edTimer); edTimer = null }
+    if (edFit) { window.removeEventListener('resize', edFit); edFit = null }
     edPlaying = false
     try { rep?.pause(); rep?.destroy?.() } catch {}
     rep = null
+    edStage.removeAttribute('style')
     edStage.innerHTML = ''
     card.classList.remove('editing')
     document.addEventListener('keydown', onKey, true)
