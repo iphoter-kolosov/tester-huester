@@ -1,5 +1,7 @@
 // Where reports go + which project they belong to. Defaults make it work out of the box against local dev.
-export type Config = { collectorUrl: string; ingestKey: string; recordReplay: boolean }
+// `lastProjectId` remembers where the previous report went, so the picker reopens on the project you actually
+// work in instead of resetting to the ingest key's default every time.
+export type Config = { collectorUrl: string; ingestKey: string; recordReplay: boolean; lastProjectId: string }
 
 // Build-time collector URL: a production build (VITE_TH_COLLECTOR set) points at the VPS with no manual popup
 // setup; local dev falls back to localhost. Vite statically inlines import.meta.env at build, so this is a
@@ -13,14 +15,16 @@ export const DEFAULTS: Config = {
   collectorUrl: ENV_COLLECTOR || 'http://localhost:4319',
   ingestKey: 'th_demo_key_0001',
   recordReplay: true, // continuously buffer the last ~2 min of DOM replay (mask-by-default); opt-out in the popup
+  lastProjectId: '',
 }
 
 export async function getConfig(): Promise<Config> {
-  const c = await chrome.storage.local.get(['collectorUrl', 'ingestKey', 'recordReplay'])
+  const c = await chrome.storage.local.get(['collectorUrl', 'ingestKey', 'recordReplay', 'lastProjectId'])
   return {
     collectorUrl: (c.collectorUrl as string) || DEFAULTS.collectorUrl,
     ingestKey: (c.ingestKey as string) || DEFAULTS.ingestKey,
     recordReplay: c.recordReplay === undefined ? DEFAULTS.recordReplay : Boolean(c.recordReplay),
+    lastProjectId: (c.lastProjectId as string) || '',
   }
 }
 

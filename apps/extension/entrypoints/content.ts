@@ -1,6 +1,6 @@
 import { ImageAnnotator, DEFAULT_COLORS } from '@th/core'
 import type { ReproBundle, Tool, Width } from '@th/core'
-import { getConfig } from '@/lib/config'
+import { getConfig, setConfig } from '@/lib/config'
 import { buildReport, type ReportType, type Severity } from '@/lib/report'
 import { requestBundle } from '@/lib/bridge'
 import {
@@ -94,8 +94,17 @@ const CSS = `
 .canvas.text { cursor: text; }
 .canvas.eraser { cursor: pointer; }
 .tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.sw { width: 22px; height: 22px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
-.sw.on { border-color: #e6edf7; box-shadow: 0 0 0 2px #131a2b; }
+.sw { width: 24px; height: 24px; border-radius: 50%; border: 2px solid rgba(255,255,255,.25); cursor: pointer; padding: 0; }
+.sw:hover { transform: scale(1.12); }
+.sw.on { border-color: #e6edf7; box-shadow: 0 0 0 2px #131a2b, 0 0 0 3px #38bdf8; }
+/* colour picker: current swatch + a popover grid of the full palette */
+.cpick { position: relative; }
+.cpcur { display: flex; align-items: center; gap: 7px; width: 100%; height: 32px; padding: 0 9px; border: 1px solid #223049; background: #0f1626; border-radius: 8px; cursor: pointer; }
+.cpcur:hover { border-color: #38bdf8; }
+.cpdot { width: 18px; height: 18px; border-radius: 50%; border: 2px solid rgba(255,255,255,.3); flex: 0 0 auto; }
+.cpcar { margin-left: auto; color: #8ea0bd; font-size: 11px; }
+.cppop { display: none; position: absolute; z-index: 14; top: 36px; left: 0; grid-template-columns: repeat(6, 1fr); gap: 7px; padding: 9px; background: #131a2b; border: 1px solid #2b3a55; border-radius: 10px; box-shadow: 0 14px 34px rgba(0,0,0,.6); }
+.cppop.on { display: grid; }
 .tb { height: 32px; padding: 0 11px; border: 1px solid #223049; background: #0f1626; color: #e6edf7; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
 .tb.on { border-color: #0a84ff; background: #0a84ff; color: #fff; }
 .tb:disabled { opacity: .4; cursor: default; }
@@ -253,16 +262,19 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
             <div class="sidescroll">
             <div class="grp">
               <span class="grpttl">Цвет</span>
-              <span class="rowx">
-                ${DEFAULT_COLORS.map((c, i) => `<button class="sw${i === 0 ? ' on' : ''}" data-c="${c}" style="background:${c}"></button>`).join('')}
-              </span>
+              <div class="cpick">
+                <button class="cpcur" title="Выбрать цвет"><span class="cpdot" style="background:${DEFAULT_COLORS[0]}"></span><span class="cpcar">▾</span></button>
+                <div class="cppop">
+                  ${DEFAULT_COLORS.map((c, i) => `<button class="sw${i === 0 ? ' on' : ''}" data-c="${c}" style="background:${c}" title="${c}"></button>`).join('')}
+                </div>
+              </div>
             </div>
             <div class="grp">
               <span class="grpttl">Инструмент</span>
               <span class="rowx">
-                <button class="tb tool on" data-tool="draw" title="Карандаш (P)">✏</button>
+                <button class="tb tool" data-tool="draw" title="Карандаш (P)">✏</button>
                 <button class="tb tool" data-tool="arrow" title="Стрелка (A)">↗</button>
-                <button class="tb tool" data-tool="rect" title="Прямоугольник (R)">▭</button>
+                <button class="tb tool on" data-tool="rect" title="Прямоугольник (R)">▭</button>
                 <button class="tb tool" data-tool="text" title="Текст (T)">T</button>
                 <button class="tb tool" data-tool="eraser" title="Ластик (E)">⌫</button>
                 <button class="tb tool" data-tool="crop" title="Кадрировать (C)">✂</button>
@@ -699,12 +711,20 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   })
   tinInput.addEventListener('blur', commitTextInput)
 
+  const cpop = q<HTMLElement>('.cppop')
+  const cdot = q<HTMLElement>('.cpdot')
+  q<HTMLElement>('.cpcur').addEventListener('click', (e) => { e.stopPropagation(); cpop.classList.toggle('on') })
   root.querySelectorAll('.sw').forEach((el) =>
     el.addEventListener('click', () => {
-      ann.setColor((el as HTMLElement).dataset.c!)
+      const c = (el as HTMLElement).dataset.c!
+      ann.setColor(c)
+      cdot.style.background = c
       root.querySelectorAll('.sw').forEach((s) => s.classList.toggle('on', s === el))
+      cpop.classList.remove('on')
     }),
   )
+  // Click anywhere else closes the palette (inside the shadow root and on the page below it).
+  root.addEventListener('click', (e) => { if (!(e.target as HTMLElement).closest?.('.cpick')) cpop.classList.remove('on') })
   root.querySelectorAll('.tb.tool').forEach((el) =>
     el.addEventListener('click', () => ann.setTool((el as HTMLElement).dataset.tool as Tool)),
   )
@@ -814,14 +834,20 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   // the ingest key's own project. Choosing another routes the report there on send.
   const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
   getConfig()
-    .then((cfg) => chrome.runtime.sendMessage({ type: 'TH_PROJECTS', collectorUrl: cfg.collectorUrl, ingestKey: cfg.ingestKey }))
-    .then((res: { ok?: boolean; projects?: { id: string; name: string }[]; defaultId?: string }) => {
+    .then(async (cfg) => {
+      const res = (await chrome.runtime.sendMessage({ type: 'TH_PROJECTS', collectorUrl: cfg.collectorUrl, ingestKey: cfg.ingestKey })) as
+        { ok?: boolean; projects?: { id: string; name: string }[]; defaultId?: string }
       if (!res?.ok || !Array.isArray(res.projects) || !res.projects.length) return
-      projectId = res.defaultId || res.projects[0]!.id
+      // Preference order: the project used last (if it still exists) → the ingest key's own → the first one.
+      const remembered = res.projects.some((p) => p.id === cfg.lastProjectId) ? cfg.lastProjectId : ''
+      projectId = remembered || res.defaultId || res.projects[0]!.id
       psel.innerHTML = res.projects.map((p) => `<option value="${esc(p.id)}"${p.id === projectId ? ' selected' : ''}>${esc(p.name)}</option>`).join('')
     })
     .catch(() => {})
-  psel.addEventListener('change', () => { projectId = psel.value || null })
+  psel.addEventListener('change', () => {
+    projectId = psel.value || null
+    if (projectId) void setConfig({ lastProjectId: projectId }) // remembered for the next report
+  })
 
   function setMsg(t: string, cls = '') { msg.textContent = t; msg.className = 'msg ' + cls }
 

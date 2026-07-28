@@ -28,7 +28,22 @@ type Cmd = { op: 'add'; prim: Prim } | { op: 'erase'; prim: Prim; index: number 
 type Drawable = CanvasImageSource & { width: number; height: number }
 type Snapshot = { img: Drawable | null; prims: Prim[]; w: number; h: number }
 
-export const DEFAULT_COLORS = ['#ff3b30', '#ffcc00', '#0a84ff', '#0c1526']
+// Annotation palette. Red leads because it is the default marker; the rest are picked to stay distinguishable
+// on both light and dark screenshots (and from each other for viewers with colour-vision deficiency).
+export const DEFAULT_COLORS = [
+  '#ff3b30', // red
+  '#ff9500', // orange
+  '#ffcc00', // yellow
+  '#34c759', // green
+  '#00c7be', // teal
+  '#0a84ff', // blue
+  '#5856d6', // indigo
+  '#af52de', // purple
+  '#ff2d55', // pink
+  '#ffffff', // white
+  '#8e8e93', // grey
+  '#0c1526', // near-black
+]
 export const DEFAULT_WIDTH: Width = 'med'
 // Multipliers applied to a canvas-scaled base width, so lines stay proportional on tiny and huge screenshots.
 const WIDTH_MUL: Record<Width, number> = { thin: 0.6, med: 1, thick: 1.7 }
@@ -66,7 +81,9 @@ export class ImageAnnotator {
   color: string
   width: Width
   textSize: Width = 'med'
-  tool: Tool = 'draw'
+  // Rectangle is the default: the overwhelmingly common annotation is "look at THIS box", and a stray
+  // pencil stroke from a mis-click is noisier than a stray rectangle.
+  tool: Tool = 'rect'
 
   private canvas: HTMLCanvasElement
   private ctx: CanvasRenderingContext2D
@@ -112,7 +129,7 @@ export class ImageAnnotator {
     this.redoStack = []
     this.cropRect = null
     this.current = null
-    this.tool = 'draw'
+    this.tool = 'rect'
     this.redraw()
     this.onChange()
   }
@@ -296,17 +313,38 @@ export class ImageAnnotator {
         break
       }
       case 'arrow': {
+        // One filled silhouette instead of a stroked line plus a small triangle: the shaft tapers from a fine
+        // tail into a broad head, so the arrow reads as a deliberate pointer at any size — the stroke+triangle
+        // version left the line poking through the head and looked flimsy.
         const lw = this.pxWidth(prim.width)
-        ctx.strokeStyle = prim.color; ctx.fillStyle = prim.color; ctx.lineWidth = lw
-        ctx.lineJoin = 'round'; ctx.lineCap = 'round'
-        ctx.beginPath(); ctx.moveTo(prim.a.x, prim.a.y); ctx.lineTo(prim.b.x, prim.b.y); ctx.stroke()
-        const ang = Math.atan2(prim.b.y - prim.a.y, prim.b.x - prim.a.x)
-        const head = Math.max(10, lw * 3.2), spread = Math.PI / 7
+        const dx = prim.b.x - prim.a.x, dy = prim.b.y - prim.a.y
+        const len = Math.hypot(dx, dy) || 1
+        const ux = dx / len, uy = dy / len // along the arrow
+        const nx = -uy, ny = ux // perpendicular
+
+        const headLen = Math.min(len * 0.42, Math.max(16, lw * 4.2))
+        const headHalf = Math.max(10, lw * 2.6)
+        const tailHalf = Math.max(1.1, lw * 0.42)
+        const neckHalf = Math.max(1.8, lw * 0.72)
+        const nx0 = prim.b.x - ux * headLen, ny0 = prim.b.y - uy * headLen // where the head begins
+
+        const P = (px: number, py: number, s: number) => [px + nx * s, py + ny * s] as const
         ctx.beginPath()
-        ctx.moveTo(prim.b.x, prim.b.y)
-        ctx.lineTo(prim.b.x - head * Math.cos(ang - spread), prim.b.y - head * Math.sin(ang - spread))
-        ctx.lineTo(prim.b.x - head * Math.cos(ang + spread), prim.b.y - head * Math.sin(ang + spread))
-        ctx.closePath(); ctx.fill()
+        ctx.moveTo(...P(prim.a.x, prim.a.y, tailHalf))
+        ctx.lineTo(...P(nx0, ny0, neckHalf))
+        ctx.lineTo(...P(nx0, ny0, headHalf))
+        ctx.lineTo(prim.b.x, prim.b.y) // the tip
+        ctx.lineTo(...P(nx0, ny0, -headHalf))
+        ctx.lineTo(...P(nx0, ny0, -neckHalf))
+        ctx.lineTo(...P(prim.a.x, prim.a.y, -tailHalf))
+        ctx.closePath()
+        ctx.fillStyle = prim.color
+        ctx.lineJoin = 'round'
+        // A hairline dark edge keeps the arrow legible over same-coloured UI.
+        ctx.strokeStyle = 'rgba(0,0,0,.35)'
+        ctx.lineWidth = Math.max(1, lw * 0.16)
+        ctx.fill()
+        ctx.stroke()
         break
       }
       case 'rect': {
