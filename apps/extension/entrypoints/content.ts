@@ -61,11 +61,16 @@ const WIDTHS: { value: Width; label: string }[] = [
 const CSS = `
 :host, * { box-sizing: border-box; }
 .scrim { position: fixed; inset: 0; background: rgba(3,7,18,.82); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 16px; font: 14px system-ui, sans-serif; }
-.card { position: relative; display: flex; flex-direction: column; gap: 10px; width: 98vw; max-width: 98vw; max-height: 96vh; background: #131a2b; color: #e6edf7; border: 1px solid #223049; border-radius: 14px; padding: 14px; box-shadow: 0 30px 80px -20px rgba(0,0,0,.7); }
+/* The card is a column where ONLY the canvas flexes: every control row keeps its natural height, so the note
+   field and the Send row stay on screen at any window size — the screenshot shrinks instead of pushing them
+   out of view. (A fixed 74vh canvas made the card taller than the viewport on a 1080p screen.) */
+.card { position: relative; display: flex; flex-direction: column; gap: 8px; width: 98vw; max-width: 98vw; height: 96vh; max-height: 96vh; background: #131a2b; color: #e6edf7; border: 1px solid #223049; border-radius: 14px; padding: 12px; box-shadow: 0 30px 80px -20px rgba(0,0,0,.7); overflow: hidden; }
+.card > *:not(.cvwrap):not(.ed) { flex: 0 0 auto; }
 .head { display: flex; align-items: center; gap: 10px; }
 .title { font-weight: 800; }
 .head .x { margin-left: auto; width: 30px; height: 30px; border-radius: 50%; border: 1px solid #223049; background: #0f1626; color: #8ea0bd; cursor: pointer; }
-.canvas { display: block; margin: 0 auto; max-width: 100%; max-height: 74vh; border-radius: 10px; border: 1px solid #223049; background: #0f1626; touch-action: none; cursor: crosshair; }
+.cvwrap { flex: 1 1 auto; min-height: 90px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.canvas { display: block; max-width: 100%; max-height: 100%; border-radius: 10px; border: 1px solid #223049; background: #0f1626; touch-action: none; cursor: crosshair; }
 .canvas.crop { cursor: cell; }
 .canvas.text { cursor: text; }
 .canvas.eraser { cursor: pointer; }
@@ -91,7 +96,21 @@ const CSS = `
 .psel:hover { border-color: #38bdf8; }
 .khint { margin-left: auto; font-size: 11px; font-weight: 700; color: #8ea0bd; }
 .khint b { color: #38bdf8; font-weight: 800; }
-.note { width: 100%; min-height: 60px; padding: 10px 12px; background: #0f1626; border: 1px solid #223049; border-radius: 10px; color: #e6edf7; font: inherit; resize: vertical; outline: none; }
+.note { width: 100%; min-height: 44px; height: 62px; max-height: 20vh; padding: 9px 12px; background: #0f1626; border: 1px solid #223049; border-radius: 10px; color: #e6edf7; font: inherit; resize: vertical; outline: none; }
+/* Short viewports: shed the optional chrome first (labels, spacing) so the note + Send row always fit. */
+@media (max-height: 900px) {
+  .tb { height: 29px; padding: 0 9px; }
+  .seg button { height: 27px; padding: 0 9px; }
+  .note { height: 50px; }
+  .btn { height: 34px; padding: 0 15px; }
+  .meta label { font-size: 10.5px; }
+}
+@media (max-height: 760px) {
+  .card { gap: 6px; padding: 10px; }
+  .khint, .ctxhint { display: none; }
+  .note { height: 42px; min-height: 38px; }
+  .tools { gap: 4px; }
+}
 .foot { display: flex; align-items: center; gap: 10px; }
 .msg { color: #8ea0bd; font-size: 12.5px; }
 .msg.err { color: #ff6b6b; }
@@ -131,7 +150,7 @@ const CSS = `
    tester never loses the report they were writing) */
 .card.editing > *:not(.head):not(.ed) { display: none; }
 .ed { display: none; flex-direction: column; gap: 10px; }
-.card.editing .ed { display: flex; }
+.card.editing .ed { display: flex; flex: 1 1 auto; min-height: 0; overflow: auto; }
 .edhead { display: flex; align-items: center; gap: 10px; }
 .edttl { font-weight: 800; }
 .edhint { font-size: 11.5px; color: #8ea0bd; font-weight: 700; }
@@ -206,7 +225,7 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     <div class="scrim" part="scrim">
       <div class="card">
         <div class="head"><span class="title"></span><span class="recst"></span><span class="ctxhint"></span><button class="x" title="Close">✕</button></div>
-        <canvas class="canvas"></canvas>
+        <div class="cvwrap"><canvas class="canvas"></canvas></div>
         <div class="tools">
           ${DEFAULT_COLORS.map((c, i) => `<button class="sw${i === 0 ? ' on' : ''}" data-c="${c}" style="background:${c}"></button>`).join('')}
           <span class="vsep"></span>
