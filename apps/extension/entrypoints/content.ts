@@ -61,16 +61,35 @@ const WIDTHS: { value: Width; label: string }[] = [
 const CSS = `
 :host, * { box-sizing: border-box; }
 .scrim { position: fixed; inset: 0; background: rgba(3,7,18,.82); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 16px; font: 14px system-ui, sans-serif; }
-/* The card is a column where ONLY the canvas flexes: every control row keeps its natural height, so the note
-   field and the Send row stay on screen at any window size — the screenshot shrinks instead of pushing them
-   out of view. (A fixed 74vh canvas made the card taller than the viewport on a 1080p screen.) */
+/* Two columns: every control lives in a narrow left rail, so the screenshot gets the whole right side and the
+   comment box spans the full width beneath it. Nothing is ever pushed off-screen — the canvas is the only
+   element that flexes, everything else keeps its natural size. */
 .card { position: relative; display: flex; flex-direction: column; gap: 8px; width: 98vw; max-width: 98vw; height: 96vh; max-height: 96vh; background: #131a2b; color: #e6edf7; border: 1px solid #223049; border-radius: 14px; padding: 12px; box-shadow: 0 30px 80px -20px rgba(0,0,0,.7); overflow: hidden; }
-.card > *:not(.cvwrap):not(.ed) { flex: 0 0 auto; }
-.head { display: flex; align-items: center; gap: 10px; }
+.head { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
 .title { font-weight: 800; }
 .head .x { margin-left: auto; width: 30px; height: 30px; border-radius: 50%; border: 1px solid #223049; background: #0f1626; color: #8ea0bd; cursor: pointer; }
+
+.body { display: flex; gap: 10px; flex: 1 1 auto; min-height: 0; }
+/* The rail's action buttons are pinned: only the controls above them scroll, so Send/Cancel/record are
+   reachable at any window height instead of hiding below an overflow. */
+.side { flex: 0 0 232px; width: 232px; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+.sidescroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 9px; padding-right: 2px; }
+.main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .cvwrap { flex: 1 1 auto; min-height: 90px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .canvas { display: block; max-width: 100%; max-height: 100%; border-radius: 10px; border: 1px solid #223049; background: #0f1626; touch-action: none; cursor: crosshair; }
+
+/* left rail groups */
+.grp { display: flex; flex-direction: column; gap: 6px; }
+.grpttl { font-size: 9.5px; font-weight: 800; color: #8ea0bd; text-transform: uppercase; letter-spacing: .05em; }
+.rowx { display: flex; gap: 5px; flex-wrap: wrap; }
+.side .tb { height: 30px; padding: 0 9px; flex: 0 0 auto; }
+.side .seg { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
+.side .seg.sev { grid-template-columns: repeat(4, 1fr); }
+.side .seg button { height: 28px; padding: 0 4px; border-right: 1px solid #223049; border-bottom: 1px solid #223049; font-size: 11.5px; }
+.side .psel { width: 100%; max-width: 100%; }
+.sidefoot { flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid #223049; }
+.sidefoot .btn { margin-left: 0; width: 100%; height: 38px; }
+.sidefoot .msg { min-height: 15px; line-height: 1.25; }
 .canvas.crop { cursor: cell; }
 .canvas.text { cursor: text; }
 .canvas.eraser { cursor: pointer; }
@@ -96,20 +115,24 @@ const CSS = `
 .psel:hover { border-color: #38bdf8; }
 .khint { margin-left: auto; font-size: 11px; font-weight: 700; color: #8ea0bd; }
 .khint b { color: #38bdf8; font-weight: 800; }
-.note { width: 100%; min-height: 44px; height: 62px; max-height: 20vh; padding: 9px 12px; background: #0f1626; border: 1px solid #223049; border-radius: 10px; color: #e6edf7; font: inherit; resize: vertical; outline: none; }
-/* Short viewports: shed the optional chrome first (labels, spacing) so the note + Send row always fit. */
+/* the comment box: full width under the canvas, a comfortable share of the height */
+.note { width: 100%; flex: 0 0 26%; min-height: 74px; padding: 10px 13px; background: #0f1626; border: 1px solid #223049; border-radius: 10px; color: #e6edf7; font: inherit; line-height: 1.45; resize: none; outline: none; }
+.note:focus { border-color: #38bdf8; }
+/* Short viewports / narrow windows: tighten the rail rather than pushing anything out of reach. */
 @media (max-height: 900px) {
-  .tb { height: 29px; padding: 0 9px; }
-  .seg button { height: 27px; padding: 0 9px; }
-  .note { height: 50px; }
-  .btn { height: 34px; padding: 0 15px; }
-  .meta label { font-size: 10.5px; }
+  .side .tb { height: 28px; padding: 0 8px; }
+  .side .seg button { height: 26px; }
+  .sidefoot .btn { height: 34px; }
+  .note { flex-basis: 22%; min-height: 62px; }
 }
 @media (max-height: 760px) {
   .card { gap: 6px; padding: 10px; }
   .khint, .ctxhint { display: none; }
-  .note { height: 42px; min-height: 38px; }
-  .tools { gap: 4px; }
+  .side { flex-basis: 210px; width: 210px; gap: 7px; }
+  .note { flex-basis: 20%; min-height: 54px; }
+}
+@media (max-width: 1100px) {
+  .side { flex-basis: 200px; width: 200px; }
 }
 .foot { display: flex; align-items: center; gap: 10px; }
 .msg { color: #8ea0bd; font-size: 12.5px; }
@@ -134,21 +157,21 @@ const CSS = `
 .recst { font-size: 11.5px; font-weight: 800; white-space: nowrap; }
 .recst.ok { color: #34d399; }
 .recst.warn { color: #fbbf24; }
-/* "attach the recording?" strip on the main screen */
-.clip { display: none; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 12px; border: 1px solid #223049; border-radius: 10px; background: #0f1626; }
+/* "attach the recording?" block — lives in the left rail, stacked to fit its width */
+.clip { display: none; flex-direction: column; gap: 6px; padding: 8px 9px; border: 1px solid #223049; border-radius: 10px; background: #0f1626; }
 .clip.on { display: flex; }
-.clipq { font-size: 12.5px; font-weight: 700; }
+.clipq { font-size: 11.5px; font-weight: 700; line-height: 1.3; }
 .clipq b { color: #38bdf8; }
-.clipst { font-size: 12px; font-weight: 700; color: #34d399; }
+.clipst { font-size: 11px; font-weight: 700; color: #34d399; line-height: 1.3; }
 .clipst.off { color: #8ea0bd; }
-.clipbtns { display: inline-flex; gap: 6px; margin-left: auto; }
-.clipb2 { height: 30px; padding: 0 12px; border: 1px solid #223049; background: #131a2b; color: #e6edf7; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+.clipbtns { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+.clipb2 { height: 28px; padding: 0 6px; border: 1px solid #223049; background: #131a2b; color: #e6edf7; border-radius: 8px; font-size: 11.5px; font-weight: 700; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .clipb2:hover { border-color: #38bdf8; }
-.clipb2.pri { border-color: #0a84ff; background: #0a84ff; color: #fff; }
+.clipb2.pri { border-color: #0a84ff; background: #0a84ff; color: #fff; grid-column: 1 / -1; }
 
 /* the trim editor: a real player with in/out marks, shown INSTEAD of the annotation screen (same card, so the
    tester never loses the report they were writing) */
-.card.editing > *:not(.head):not(.ed) { display: none; }
+.card.editing > .body { display: none; }
 .ed { display: none; flex-direction: column; gap: 10px; }
 .card.editing .ed { display: flex; flex: 1 1 auto; min-height: 0; overflow: auto; }
 .edhead { display: flex; align-items: center; gap: 10px; }
@@ -225,52 +248,70 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     <div class="scrim" part="scrim">
       <div class="card">
         <div class="head"><span class="title"></span><span class="recst"></span><span class="ctxhint"></span><button class="x" title="Close">✕</button></div>
-        <div class="cvwrap"><canvas class="canvas"></canvas></div>
-        <div class="tools">
-          ${DEFAULT_COLORS.map((c, i) => `<button class="sw${i === 0 ? ' on' : ''}" data-c="${c}" style="background:${c}"></button>`).join('')}
-          <span class="vsep"></span>
-          <button class="tb tool on" data-tool="draw" title="Карандаш (P)">✏</button>
-          <button class="tb tool" data-tool="arrow" title="Стрелка (A)">↗</button>
-          <button class="tb tool" data-tool="rect" title="Прямоугольник (R)">▭</button>
-          <button class="tb tool" data-tool="text" title="Текст (T)">T</button>
-          <button class="tb tool" data-tool="eraser" title="Ластик (E)">⌫</button>
-          <span class="vsep"></span>
-          ${WIDTHS.map((w) => `<button class="tb width${w.value === 'med' ? ' on' : ''}" data-w="${w.value}" title="${w.label} (${w.value === 'thin' ? '1' : w.value === 'med' ? '2' : '3'})">${w.value === 'thin' ? '│' : w.value === 'med' ? '┃' : '█'}</button>`).join('')}
-          <span class="vsep"></span>
-          <button class="tb tool" data-tool="crop" title="Кадрировать (C)">✂</button>
-          <span class="sep"></span>
-          <button class="tb" data-act="undo" disabled title="Отменить (Ctrl+Z)">↩ Undo</button>
-          <button class="tb" data-act="redo" disabled title="Повторить (Ctrl+Y / Ctrl+Shift+Z)">↪ Redo</button>
-          <button class="tb" data-act="clear" disabled title="Очистить (Shift+Del)">🗑 Очистить</button>
-        </div>
-        <div class="meta">
-          <label>Тип</label>
-          <div class="seg type">
-            ${TYPES.map((t) => `<button data-v="${t.value}"${t.value === 'bug' ? ' class="on"' : ''}>${t.icon} ${t.label}</button>`).join('')}
+        <div class="body">
+          <div class="side">
+            <div class="sidescroll">
+            <div class="grp">
+              <span class="grpttl">Цвет</span>
+              <span class="rowx">
+                ${DEFAULT_COLORS.map((c, i) => `<button class="sw${i === 0 ? ' on' : ''}" data-c="${c}" style="background:${c}"></button>`).join('')}
+              </span>
+            </div>
+            <div class="grp">
+              <span class="grpttl">Инструмент</span>
+              <span class="rowx">
+                <button class="tb tool on" data-tool="draw" title="Карандаш (P)">✏</button>
+                <button class="tb tool" data-tool="arrow" title="Стрелка (A)">↗</button>
+                <button class="tb tool" data-tool="rect" title="Прямоугольник (R)">▭</button>
+                <button class="tb tool" data-tool="text" title="Текст (T)">T</button>
+                <button class="tb tool" data-tool="eraser" title="Ластик (E)">⌫</button>
+                <button class="tb tool" data-tool="crop" title="Кадрировать (C)">✂</button>
+              </span>
+              <span class="rowx">
+                ${WIDTHS.map((w) => `<button class="tb width${w.value === 'med' ? ' on' : ''}" data-w="${w.value}" title="${w.label} (${w.value === 'thin' ? '1' : w.value === 'med' ? '2' : '3'})">${w.value === 'thin' ? '│' : w.value === 'med' ? '┃' : '█'}</button>`).join('')}
+                <button class="tb" data-act="undo" disabled title="Отменить (Ctrl+Z)">↩</button>
+                <button class="tb" data-act="redo" disabled title="Повторить (Ctrl+Y)">↪</button>
+                <button class="tb" data-act="clear" disabled title="Очистить (Shift+Del)">🗑</button>
+              </span>
+            </div>
+            <div class="grp">
+              <span class="grpttl">Тип</span>
+              <div class="seg type">
+                ${TYPES.map((t) => `<button data-v="${t.value}"${t.value === 'bug' ? ' class="on"' : ''}>${t.icon} ${t.label}</button>`).join('')}
+              </div>
+            </div>
+            <div class="grp">
+              <span class="grpttl">Важность</span>
+              <div class="seg sev">
+                ${SEVERITIES.map((s) => `<button data-v="${s.value}"${s.value === 'med' ? ' class="on"' : ''}>${s.label}</button>`).join('')}
+              </div>
+            </div>
+            <div class="grp">
+              <span class="grpttl">Проект</span>
+              <select class="psel"><option value="">по умолчанию</option></select>
+            </div>
+            <div class="clip">
+              <span class="clipq"></span>
+              <span class="clipst"></span>
+              <span class="clipbtns">
+                <button class="clipb2 pri" data-clip="edit">✂ Открыть редактор</button>
+                <button class="clipb2" data-clip="all">Целиком</button>
+                <button class="clipb2" data-clip="none">Не класть</button>
+              </span>
+            </div>
+            </div>
+            <div class="sidefoot">
+              <span class="msg"></span>
+              <button class="btn ghost rec" title="Записать репро: свернуть окно, воспроизвести баг, ⏹ Стоп — клип прикрепится">🔴 Записать репро</button>
+              <button class="btn send">Send</button>
+              <button class="btn ghost cancel">Cancel</button>
+              <span class="khint"><b>Ctrl+Enter</b> отправить · <b>Esc</b> закрыть</span>
+            </div>
           </div>
-          <label>Важность</label>
-          <div class="seg sev">
-            ${SEVERITIES.map((s) => `<button data-v="${s.value}"${s.value === 'med' ? ' class="on"' : ''}>${s.label}</button>`).join('')}
+          <div class="main">
+            <div class="cvwrap"><canvas class="canvas"></canvas></div>
+            <textarea class="note" placeholder="Что не так? Опишите проблему…"></textarea>
           </div>
-          <label>Проект</label>
-          <select class="psel"><option value="">по умолчанию</option></select>
-          <span class="khint"><b>Ctrl+Enter</b> отправить · <b>Esc</b> закрыть</span>
-        </div>
-        <div class="clip">
-          <span class="clipq"></span>
-          <span class="clipst"></span>
-          <span class="clipbtns">
-            <button class="clipb2 pri" data-clip="edit">✂ Открыть редактор</button>
-            <button class="clipb2" data-clip="all">Прикрепить целиком</button>
-            <button class="clipb2" data-clip="none">Не прикреплять</button>
-          </span>
-        </div>
-        <textarea class="note" placeholder="What's wrong here?"></textarea>
-        <div class="foot">
-          <span class="msg"></span>
-          <button class="btn ghost rec" title="Записать репро: свернуть окно, воспроизвести баг, ⏹ Стоп — клип прикрепится">🔴 Записать репро</button>
-          <button class="btn ghost cancel">Cancel</button>
-          <button class="btn send">Send</button>
         </div>
 
         <div class="ed">
