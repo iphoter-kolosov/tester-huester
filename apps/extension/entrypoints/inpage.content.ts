@@ -11,6 +11,14 @@ export default defineContentScript({
   runAt: 'document_start',
   world: 'MAIN',
   main() {
+    // Idempotent load guard. The declarative injection AND the background warm-up/on-demand injection can both
+    // land this script in the same MAIN world. A second instance would wrap an already-wrapped console, start a
+    // second ActionRecorder (duplicate steps) and add a second bridge listener — and whichever replies first
+    // wins, which is how a page ended up reporting ZERO console entries while network capture looked fine.
+    const g = window as unknown as { __thProbe?: boolean }
+    if (g.__thProbe) return
+    g.__thProbe = true
+
     const consoleRing = new Ring<ConsoleEntry>(200)
     const networkRing = new Ring<NetworkEntry>(200)
     const actionRing = new Ring<ActionStep>(100)
