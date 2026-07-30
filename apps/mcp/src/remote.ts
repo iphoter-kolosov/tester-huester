@@ -46,12 +46,12 @@ async function api(path: string, params: Record<string, string | number | undefi
 
 // Scoped write: PATCH /api/reports/:id?projectKey=… { status }. The collector only allows it on reports that
 // belong to THIS project's read key, so an agent can only ever change the status of its own cases.
-async function patch(path: string, payload: Record<string, unknown>): Promise<string> {
+async function patch(path: string, payload: Record<string, unknown>, method: 'PATCH' | 'POST' = 'PATCH'): Promise<string> {
   const url = new URL(BASE + path)
   url.searchParams.set('projectKey', KEY)
   let res: Response
   try {
-    res = await fetch(url, { method: 'PATCH', headers: { Accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify(payload) })
+    res = await fetch(url, { method, headers: { Accept: 'application/json', 'content-type': 'application/json' }, body: JSON.stringify(payload) })
   } catch (e) {
     return `network error reaching ${BASE}: ${String(e)}`
   }
@@ -83,6 +83,20 @@ server.tool(
   'Get an agent-ready reproduction for a report: numbered user steps (from the recorded action trail) plus a triage summary (console errors, failed network requests, environment).',
   { id: z.string() },
   async ({ id }) => ({ content: [{ type: 'text', text: await api(`/api/reports/${encodeURIComponent(id)}/repro`) }] }),
+)
+
+server.tool(
+  'add_comment',
+  "Post a comment on a report in THIS project — report back what you did (commit/PR, what was actually wrong), why you could not reproduce it, or what you need from the reporter. The comment is attributed to this project and appears in the ticket's thread, where the human can reply. Use it whenever you change a status, so 'fixed' is never a bare word.",
+  { id: z.string(), body: z.string().min(1).max(4000) },
+  async ({ id, body }) => ({ content: [{ type: 'text', text: await patch(`/api/reports/${encodeURIComponent(id)}/comments`, { body }, 'POST') }] }),
+)
+
+server.tool(
+  'list_comments',
+  'Read the comment thread on a report in this project (previous agent notes and the reporter\'s replies), oldest first.',
+  { id: z.string() },
+  async ({ id }) => ({ content: [{ type: 'text', text: await api(`/api/reports/${encodeURIComponent(id)}/comments`) }] }),
 )
 
 server.tool(

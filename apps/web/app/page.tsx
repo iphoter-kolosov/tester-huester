@@ -166,6 +166,7 @@ export default async function Home({
           {rows.map((r) => {
             const badges = contextBadges(r.context) ?? []
             if (r.replayUrl) badges.push({ t: '▶ replay' })
+            const nComments = repo.countComments(r.id) // an agent's reply should be visible from the board
             return (
               <div className={'row' + (r.archived ? ' row-arch' : '')} key={r.id}>
                 <Link className="rowthumb" href={`/r/${r.id}`}>
@@ -175,6 +176,7 @@ export default async function Home({
                   <Link className={'note' + (r.note ? '' : ' empty2')} href={`/r/${r.id}`}>{r.note || 'без заметки'}</Link>
                   <div className="meta">
                     <span className="proj-tag">{projName.get(r.projectId) ?? 'project'}</span>
+                    {nComments > 0 && <span className="cmtcount">💬 {nComments}</span>}
                     <span>{ago(r.createdAt)}</span>
                     {r.pageUrl && <a href={r.pageUrl} target="_blank" rel="noreferrer">{r.pageUrl}</a>}
                     {r.viewport && <span>{r.viewport}</span>}

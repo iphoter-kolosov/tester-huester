@@ -4,6 +4,7 @@ import type { ReproBundle } from '@th/core'
 import { repo } from '@th/db'
 import RowControls from '@/components/RowControls'
 import EditableNote from '@/components/EditableNote'
+import CommentThread from '@/components/CommentThread'
 import ReproContext from '@/components/ReproContext'
 import ReplayPlayer from '@/components/ReplayPlayer'
 import { isAuthed } from '@/lib/auth'
@@ -16,6 +17,7 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
   const r = repo.getReport(id)
   if (!r) notFound()
   const projOpts = repo.listProjects().map((p) => ({ value: p.id, label: p.name }))
+  const comments = repo.listComments(r.id)
   return (
     <main className="wrap">
       <Link className="back" href="/">← все тикеты</Link>
@@ -40,6 +42,8 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
         <span className="k">Created</span><span>{new Date(r.createdAt).toLocaleString()}</span>
         <span className="k">ID</span><span style={{ color: 'var(--muted)' }}>{r.id}</span>
       </div>
+      <CommentThread reportId={r.id} comments={comments} />
+
       {r.context ? <ReproContext context={r.context as ReproBundle} /> : null}
       {r.replayUrl ? <ReplayPlayer url={r.replayUrl} /> : null}
     </main>

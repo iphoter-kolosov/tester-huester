@@ -18,7 +18,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   if (!report || report.projectId !== r.project.id) {
     return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
   }
-  return NextResponse.json({ ok: true, report })
+  // Comments ride along so an agent picking the ticket up sees the whole conversation — its own earlier notes
+  // and the human's replies — without a second call.
+  return NextResponse.json({ ok: true, report, comments: repo.listComments(id) })
 }
 
 // Write endpoint with two authorized callers:

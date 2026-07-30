@@ -127,6 +127,25 @@ a { color: inherit; text-decoration: none; }
 .dmeta { display: grid; grid-template-columns: 130px 1fr; gap: 6px 14px; font-size: 13px; }
 .dmeta .k { color: var(--muted); }
 
+/* comment thread */
+.thr { margin-top: 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); padding: 14px 16px; }
+.thrhead { display: flex; align-items: center; gap: 9px; margin-bottom: 12px; }
+.thrn { font-size: 11px; font-weight: 800; color: var(--muted); background: var(--panel2); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
+.cmt { border: 1px solid var(--border); border-radius: 12px; background: var(--panel2); padding: 10px 13px; margin-bottom: 9px; }
+.cmt-agent { border-color: color-mix(in srgb, var(--accent) 38%, var(--border)); }
+.cmthead { display: flex; align-items: baseline; gap: 10px; margin-bottom: 5px; }
+.cmtwho { font-size: 12.5px; font-weight: 800; }
+.cmt-agent .cmtwho { color: var(--accent); }
+.cmtwhen { font-size: 11.5px; color: var(--muted); }
+.cmtdel { margin-left: auto; border: 0; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; padding: 0 2px; }
+.cmtdel:hover { color: #fda4af; }
+.cmtbody { white-space: pre-wrap; line-height: 1.5; font-size: 13.5px; }
+.cmtnew { margin-top: 12px; }
+.cmtta { width: 100%; min-height: 68px; padding: 10px 13px; background: var(--panel2); border: 1px solid var(--border); border-radius: 11px; color: var(--text); font: inherit; line-height: 1.45; resize: vertical; outline: none; }
+.cmtta:focus { border-color: color-mix(in srgb, var(--accent) 55%, var(--border)); }
+.cmtfoot { display: flex; align-items: center; gap: 12px; margin-top: 8px; }
+.cmtcount { font-size: 11px; font-weight: 700; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 40%, var(--border)); border-radius: 999px; padding: 1px 8px; }
+
 /* editable note */
 .ednote { margin: 14px 0; }
 .ednote-ta { width: 100%; min-height: 90px; padding: 14px 16px; background: var(--panel); border: 1px solid var(--border); border-radius: 12px; color: var(--text); font: inherit; line-height: 1.55; resize: vertical; outline: none; }

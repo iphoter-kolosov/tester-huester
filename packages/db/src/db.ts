@@ -33,6 +33,15 @@ function db(): DatabaseSync {
       ingest_key text NOT NULL UNIQUE,
       created_at integer NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS comments (
+      id text PRIMARY KEY,
+      report_id text NOT NULL,
+      author text NOT NULL,        -- display name: the project's name for an agent, 'Вы' for the dashboard
+      author_kind text NOT NULL,   -- 'agent' | 'human'
+      body text NOT NULL,
+      created_at integer NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS comments_report_idx ON comments (report_id, created_at);
     CREATE TABLE IF NOT EXISTS reports (
       id text PRIMARY KEY,
       project_id text NOT NULL,
@@ -93,7 +102,11 @@ export type Report = {
   context: unknown | null; replayUrl: string | null; type: ReportType; severity: Severity | null; archived: boolean
 }
 
+export type AuthorKind = 'agent' | 'human'
+export type Comment = { id: string; reportId: string; author: string; authorKind: AuthorKind; body: string; createdAt: number }
+
 const toProject = (r: any): Project => ({ id: r.id, name: r.name, ingestKey: r.ingest_key, readKey: r.read_key ?? '', createdAt: r.created_at })
+const toComment = (r: any): Comment => ({ id: r.id, reportId: r.report_id, author: r.author, authorKind: (r.author_kind ?? 'human') as AuthorKind, body: r.body, createdAt: r.created_at })
 const toReport = (r: any): Report => ({
   id: r.id, projectId: r.project_id, note: r.note, screenshotUrl: r.screenshot_url, pageUrl: r.page_url,
   viewport: r.viewport, userAgent: r.user_agent, reporter: r.reporter, status: r.status, createdAt: r.created_at,
@@ -202,6 +215,27 @@ export const repo = {
   deleteReport(id: string): boolean {
     return db().prepare('DELETE FROM reports WHERE id = ?').run(id).changes > 0
   },
+  // ── comments: the thread on a ticket ──────────────────────────────────────────────────────────────────
+  // A dev agent reports back here ("fixed in <commit>", "could not reproduce", "declined because…") and the
+  // human answers in the same thread, so a ticket carries the conversation instead of just a status word.
+  listComments(reportId: string): Comment[] {
+    const rows = db().prepare('SELECT * FROM comments WHERE report_id = ? ORDER BY created_at ASC').all(reportId)
+    return rows.map(toComment)
+  },
+  addComment(x: { reportId: string; author: string; authorKind: AuthorKind; body: string }): Comment {
+    const id = crypto.randomUUID()
+    db().prepare('INSERT INTO comments (id, report_id, author, author_kind, body, created_at) VALUES (?,?,?,?,?,?)')
+      .run(id, x.reportId, x.author, x.authorKind, x.body, Date.now())
+    return toComment(db().prepare('SELECT * FROM comments WHERE id = ?').get(id))
+  },
+  deleteComment(id: string): boolean {
+    return db().prepare('DELETE FROM comments WHERE id = ?').run(id).changes > 0
+  },
+  countComments(reportId: string): number {
+    const r = db().prepare('SELECT COUNT(*) c FROM comments WHERE report_id = ?').get(reportId) as { c: number }
+    return r?.c ?? 0
+  },
+
   // Edit a report's properties after creation. Only the supplied fields are written.
   updateReport(id: string, fields: { note?: string; type?: ReportType; severity?: Severity | null }): boolean {
     const sets: string[] = []
