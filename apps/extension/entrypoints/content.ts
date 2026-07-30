@@ -853,6 +853,30 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
 
   sendBtn.addEventListener('click', async () => {
     const cfg = await getConfig()
+
+    // Prepare the recording FIRST, so its real numbers (raw size, compressed size, why it was dropped) can ride
+    // in the report's diagnostics. Previously diag was built before this and could only say "a clip existed",
+    // which is exactly the gap that made "sometimes it doesn't save the screencast" un-diagnosable.
+    const sel = selectedClip()
+    const replay = sel.events
+    let replayPayload: RREvent[] | undefined
+    let replayGz: string | undefined
+    let replayWarn = ''
+    let replayBytes = 0
+    let gzBytes = 0
+    let gzErr = ''
+    if (replay.length > 1) {
+      const json = JSON.stringify(replay)
+      replayBytes = json.length
+      const gz = await gzipToBase64(json)
+      gzBytes = gz.length
+      if (!gz) gzErr = 'compression unavailable'
+      // Size is the only hard reason to drop a clip; gzip keeps real recordings far below the cap.
+      if (gz && gz.length < 24_000_000) replayGz = gz
+      else if (!gz && replayBytes < 4_000_000) replayPayload = replay
+      else replayWarn = `запись не приложена (${Math.round(replayBytes / 1e6)} МБ — слишком большая)`
+    }
+
     const payload = buildReport({
       ingestKey: cfg.ingestKey,
       note: note.value,
@@ -867,7 +891,26 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       userAgent: navigator.userAgent,
       // Always carry the recorder's self-report, and keep the bundle even when the MAIN-world probe is absent
       // (a tab that outlived an extension reload) so a context-less report still says WHY it is context-less.
-      context: { ...(context ?? {}), diag: { ...recorderDiag(), bridge: !!context, clipSpan: Math.round(spanOf(replaySource())) } } as typeof context,
+      context: {
+        ...(context ?? {}),
+        diag: {
+          ...recorderDiag(),
+          bridge: !!context,
+          // `caps` identifies the build, so a report from a stale extension is obvious instead of looking like
+          // a server-side loss; probeAge says whether the MAIN-world probe started late (a tab injected after
+          // an extension reload misses the console output the app produced while loading).
+          caps: 'gz+trim+clip+cmt',
+          extVersion: chrome.runtime.getManifest?.().version ?? '?',
+          probeAge: (context as { probeAge?: number } | null)?.probeAge ?? null,
+          clipSpan: Math.round(spanOf(replay)),
+          attach,
+          trimmed: !!sel.trim,
+          replayBytes,
+          gzBytes,
+          gzErr: gzErr || null,
+          dropped: replayWarn || null,
+        },
+      } as typeof context,
       projectId,
     })
     if (!payload.note && !payload.screenshot) { setMsg('Add a note or a screenshot', 'err'); return }
@@ -878,23 +921,6 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       // in the report row). Evaluated at SEND (auto) or the frozen explicit clip. A clip that wouldn't play or
       // that blows the size cap is dropped — but never silently: the tester is told, because "I recorded it and
       // it isn't there" is the single worst failure this tool can have.
-      // The clip is the payload's bulk: a minute of a dense admin UI serialises to several MB, which the old
-      // 4 MB cut-off silently discarded. Gzip it (rrweb JSON compresses ~10x) and send the compressed blob;
-      // only a clip that is still oversized AFTER compression is dropped — and then it is said out loud.
-      const sel = selectedClip() // what the tester chose to attach (possibly nothing, possibly a trim)
-      const replay = sel.events
-      let replayPayload: RREvent[] | undefined
-      let replayGz: string | undefined
-      let replayWarn = ''
-      let replayBytes = 0
-      if (replay.length > 1) {
-        const json = JSON.stringify(replay)
-        replayBytes = json.length
-        const gz = await gzipToBase64(json)
-        if (gz && gz.length < 24_000_000) replayGz = gz
-        else if (!gz && replayBytes < 4_000_000) replayPayload = replay // no CompressionStream → legacy path
-        else replayWarn = `запись не приложена (${Math.round(replayBytes / 1e6)} МБ — слишком большая)`
-      }
       if (replayWarn) setMsg(`⚠ ${replayWarn}`, 'warn')
       const res = await chrome.runtime.sendMessage({
         type: 'TH_SEND',

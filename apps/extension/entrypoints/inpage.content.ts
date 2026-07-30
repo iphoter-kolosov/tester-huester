@@ -19,6 +19,7 @@ export default defineContentScript({
     if (g.__thProbe) return
     g.__thProbe = true
 
+    const startedAt = typeof performance !== 'undefined' ? performance.now() : 0 // ms into the page's life
     const consoleRing = new Ring<ConsoleEntry>(200)
     const networkRing = new Ring<NetworkEntry>(200)
     const actionRing = new Ring<ActionStep>(100)
@@ -38,9 +39,13 @@ export default defineContentScript({
       if (e.source !== window) return
       const d = e.data as { __th?: string; reqId?: string } | null
       if (!d || d.__th !== TH_COLLECT) return
-      let bundle: ReproBundle | null = null
+      let bundle: (ReproBundle & { probeAge?: number }) | null = null
       try {
         bundle = assembleBundle({ env: captureEnv(window), console: consoleRing, network: networkRing, actions: actionRing })
+        // How long after the page started did this probe begin listening? Console output is produced mostly
+        // during load, so a probe that started late (a tab injected after an extension reload) legitimately
+        // has an empty console — this number tells the difference between "no logs" and "we missed them".
+        bundle.probeAge = Math.round(startedAt)
       } catch {
         bundle = null
       }

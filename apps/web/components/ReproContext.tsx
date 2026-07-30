@@ -103,9 +103,13 @@ function DiagView({ diag }: { diag: Record<string, unknown> }) {
     ['Длина прикреплённого', diag.clipSpan != null ? `${diag.clipSpan}с` : '—'],
     ['MAIN-world мост', String(diag.bridge ?? '—')],
     ['Ошибка старта', diag.lastError ? String(diag.lastError) : 'нет'],
+    ['Размер записи (сырой)', diag.replayBytes ? `${(Number(diag.replayBytes) / 1e6).toFixed(1)} МБ` : '—'],
+    ['После сжатия', diag.gzBytes ? `${Math.round(Number(diag.gzBytes) / 1024)} КБ` : '—'],
     ['Получено сервером (событий)', diag.received != null ? String(diag.received) : '—'],
-    ['Сжатый размер', diag.compressed ? `${Math.round(Number(diag.compressed) / 1024)} КБ` : '—'],
     ['Запись сохранена', diag.stored != null ? String(diag.stored) : '—'],
+    ['Причина, если не приложена', diag.dropped ? String(diag.dropped) : diag.gzErr ? String(diag.gzErr) : diag.attach === false ? 'выбрано «не прикреплять»' : '—'],
+    ['Зонд стартовал через', diag.probeAge != null ? `${Math.round(Number(diag.probeAge))} мс после загрузки` : '—'],
+    ['Версия расширения', `${diag.extVersion ?? '?'} (${diag.caps ?? 'старая сборка'})`],
   ]
   return (
     <div className="dmeta" style={{ padding: '12px 16px' }}>
