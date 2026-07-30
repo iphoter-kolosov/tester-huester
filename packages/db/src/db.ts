@@ -33,6 +33,18 @@ function db(): DatabaseSync {
       ingest_key text NOT NULL UNIQUE,
       created_at integer NOT NULL
     );
+    -- Change journal. An agent asks "what happened since cursor X" instead of re-reading every ticket to
+    -- discover state — one cheap call, and the row itself says what changed and who changed it.
+    CREATE TABLE IF NOT EXISTS events (
+      seq integer PRIMARY KEY AUTOINCREMENT,   -- monotonic cursor
+      project_id text NOT NULL,
+      report_id text NOT NULL,
+      kind text NOT NULL,                      -- created | status | edited | comment | archived | moved
+      actor text NOT NULL,                     -- 'human' | agent/project name | 'extension'
+      detail text,                             -- e.g. 'new -> fixed', or the comment's first line
+      created_at integer NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS events_project_idx ON events (project_id, seq);
     CREATE TABLE IF NOT EXISTS comments (
       id text PRIMARY KEY,
       report_id text NOT NULL,
@@ -70,6 +82,9 @@ function db(): DatabaseSync {
   // Per-project read key: read-only, single-project scope for an agent (REST/MCP) — no dashboard cookie, no
   // write-capable ingest key. Added nullable, then backfilled for pre-existing projects.
   if (!columnExists(c, 'projects', 'read_key')) c.exec('ALTER TABLE projects ADD COLUMN read_key text')
+  // Server-side cursor per project: an agent that restarts (or crashes mid-work) resumes exactly where it left
+  // off instead of losing events or re-reading the whole board.
+  if (!columnExists(c, 'projects', 'agent_cursor')) c.exec('ALTER TABLE projects ADD COLUMN agent_cursor integer NOT NULL DEFAULT 0')
   backfillReadKeys(c)
   return c
 }
@@ -101,6 +116,10 @@ export type Report = {
   viewport: string | null; userAgent: string | null; reporter: string | null; status: string; createdAt: number
   context: unknown | null; replayUrl: string | null; type: ReportType; severity: Severity | null; archived: boolean
 }
+
+export type EventKind = 'created' | 'status' | 'edited' | 'comment' | 'archived' | 'moved'
+export type ChangeEvent = { seq: number; projectId: string; reportId: string; kind: EventKind; actor: string; detail: string | null; createdAt: number }
+const toEvent = (r: any): ChangeEvent => ({ seq: r.seq, projectId: r.project_id, reportId: r.report_id, kind: r.kind as EventKind, actor: r.actor, detail: r.detail ?? null, createdAt: r.created_at })
 
 export type AuthorKind = 'agent' | 'human'
 export type Comment = { id: string; reportId: string; author: string; authorKind: AuthorKind; body: string; createdAt: number }
@@ -215,6 +234,34 @@ export const repo = {
   deleteReport(id: string): boolean {
     return db().prepare('DELETE FROM reports WHERE id = ?').run(id).changes > 0
   },
+  // ── change journal: what an agent polls instead of re-reading the board ───────────────────────────────
+  logEvent(x: { projectId: string; reportId: string; kind: EventKind; actor: string; detail?: string }): number {
+    const r = db().prepare('INSERT INTO events (project_id, report_id, kind, actor, detail, created_at) VALUES (?,?,?,?,?,?)')
+      .run(x.projectId, x.reportId, x.kind, x.actor, x.detail ?? null, Date.now())
+    return Number(r.lastInsertRowid)
+  },
+  // Everything that happened in a project after `since`, oldest first. `limit` bounds a catch-up burst.
+  eventsSince(projectId: string, since: number, limit = 100): ChangeEvent[] {
+    const rows = db().prepare('SELECT * FROM events WHERE project_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?')
+      .all(projectId, since, Math.min(limit, 500))
+    return rows.map(toEvent)
+  },
+  latestSeq(projectId: string): number {
+    const r = db().prepare('SELECT MAX(seq) s FROM events WHERE project_id = ?').get(projectId) as { s: number | null }
+    return r?.s ?? 0
+  },
+  getCursor(projectId: string): number {
+    const r = db().prepare('SELECT agent_cursor c FROM projects WHERE id = ?').get(projectId) as { c: number } | undefined
+    return r?.c ?? 0
+  },
+  // Only ever moves forward: a late ack from a slow worker must not rewind past newer, already-handled events.
+  setCursor(projectId: string, seq: number): number {
+    const cur = this.getCursor(projectId)
+    const next = Math.max(cur, seq)
+    db().prepare('UPDATE projects SET agent_cursor = ? WHERE id = ?').run(next, projectId)
+    return next
+  },
+
   // ── comments: the thread on a ticket ──────────────────────────────────────────────────────────────────
   // A dev agent reports back here ("fixed in <commit>", "could not reproduce", "declined because…") and the
   // human answers in the same thread, so a ticket carries the conversation instead of just a status word.

@@ -86,6 +86,29 @@ server.tool(
 )
 
 server.tool(
+  'wait_for_updates',
+  'BLOCK until something happens in this project — a new report, a status change, an edit, or a reply from the reporter — then return those changes. Use this as your main loop instead of re-listing reports: it costs one call and returns within a second of the change. Returns immediately if changes are already pending. `seconds` is how long to wait before giving up (default 30, max 55); an empty result just means nothing happened, call it again.',
+  { seconds: z.number().int().min(1).max(55).optional(), limit: z.number().int().min(1).max(200).optional() },
+  async ({ seconds, limit }) => ({
+    content: [{ type: 'text', text: await api('/api/updates', { wait: seconds ?? 30, limit }) }],
+  }),
+)
+
+server.tool(
+  'get_updates',
+  'Return changes in this project since the last acknowledged position, without waiting. Cheap catch-up after a restart: you get only what changed (report id, kind, who did it, detail) instead of the whole board.',
+  { since: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(200).optional() },
+  async ({ since, limit }) => ({ content: [{ type: 'text', text: await api('/api/updates', { since, limit }) }] }),
+)
+
+server.tool(
+  'ack_updates',
+  'Mark changes up to `cursor` as handled, so the next wait_for_updates/get_updates returns only newer ones. Call it AFTER you have acted on them — if you crash before acking, you will safely see those changes again.',
+  { cursor: z.number().int().min(0) },
+  async ({ cursor }) => ({ content: [{ type: 'text', text: await patch('/api/updates', { cursor }, 'POST') }] }),
+)
+
+server.tool(
   'add_comment',
   "Post a comment on a report in THIS project — report back what you did (commit/PR, what was actually wrong), why you could not reproduce it, or what you need from the reporter. The comment is attributed to this project and appears in the ticket's thread, where the human can reply. Use it whenever you change a status, so 'fixed' is never a bare word.",
   { id: z.string(), body: z.string().min(1).max(4000) },

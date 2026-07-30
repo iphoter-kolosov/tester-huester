@@ -142,5 +142,6 @@ export async function POST(req: Request) {
     severity: asSeverity(body.severity),
   })
 
+  repo.logEvent({ projectId: targetProjectId, reportId: row.id, kind: 'created', actor: 'extension', detail: (note || '(без заметки)').slice(0, 120) })
   return NextResponse.json({ ok: true, id: row.id }, { headers: CORS })
 }

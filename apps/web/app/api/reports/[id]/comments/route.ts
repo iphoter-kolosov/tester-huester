@@ -50,6 +50,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!text) return NextResponse.json({ ok: false, error: 'empty' }, { status: 400 })
 
   const comment = repo.addComment({ reportId: id, author: r.author, authorKind: r.kind, body: text })
+  // Journalled so the other side notices without polling the whole board — this is how an agent learns the
+  // reporter answered it.
+  const report = repo.getReport(id)
+  if (report) {
+    repo.logEvent({ projectId: report.projectId, reportId: id, kind: 'comment', actor: r.kind === 'agent' ? r.author : 'human', detail: text.slice(0, 200) })
+  }
   return NextResponse.json({ ok: true, comment })
 }
 
