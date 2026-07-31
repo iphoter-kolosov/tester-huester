@@ -323,6 +323,7 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
             <div class="sidefoot">
               <span class="msg"></span>
               <button class="btn ghost rec" title="Записать репро: свернуть окно, воспроизвести баг, ⏹ Стоп — клип прикрепится">🔴 Записать репро</button>
+              <button class="btn ghost reshot" title="Переснять кадр: окно свернётся, подготовьте страницу и нажмите «Снять» — заметка, видео и настройки сохранятся">📸 Переснять кадр</button>
               <button class="btn send">Send</button>
               <button class="btn ghost cancel">Cancel</button>
               <span class="khint"><b>Ctrl+Enter</b> отправить · <b>Esc</b> закрыть</span>
@@ -390,6 +391,7 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   const tmark = q<HTMLElement>('.tmark')
   const psel = q<HTMLSelectElement>('.psel')
   const recBtn = q<HTMLButtonElement>('.rec')
+  const reshotBtn = q<HTMLButtonElement>('.reshot')
   const recstEl = q<HTMLElement>('.recst')
   const clipBox = q<HTMLElement>('.clip')
   const clipQ = q<HTMLElement>('.clipq')
@@ -853,6 +855,65 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   q<HTMLElement>('.x').addEventListener('click', close)
   q<HTMLElement>('.cancel').addEventListener('click', close)
   recBtn.addEventListener('click', () => { void recordRepro() })
+  reshotBtn.addEventListener('click', () => { void reshoot() })
+
+  // Retake the screenshot for THIS report. The overlay steps aside so the page can be arranged (scroll, open a
+  // menu, hover something), then one click captures a new frame — the note, the recorded video, the type and
+  // the project all stay as they are. Without this the only way to fix a bad frame was to throw the report away
+  // and start over.
+  async function reshoot() {
+    if (closed || activeRec) return
+    if (ann.canClear() && !confirm('Разметка относится к текущему кадру и будет удалена. Переснять?')) return
+
+    reshotBtn.disabled = true
+    host.style.display = 'none'
+    document.removeEventListener('keydown', onKey, true)
+
+    const bar = document.createElement('div')
+    bar.className = REPLAY_BLOCK_CLASS
+    bar.style.cssText = 'all: initial; position: fixed; z-index: 2147483647; left: 50%; bottom: 26px; transform: translateX(-50%);'
+    const broot = bar.attachShadow({ mode: 'open' })
+    broot.innerHTML = `<style>${BAR_CSS}</style><div class="bar" style="border-color:#0a84ff"><span class="lbl">Подготовьте страницу и нажмите «Снять»</span><button class="stop" style="background:#0a84ff">📸 Снять (Enter)</button><button class="stop" data-x="1" style="background:#131a2b;border:1px solid #223049">Отмена (Esc)</button></div>`
+    document.documentElement.appendChild(bar)
+
+    let done = false
+    const finish = () => {
+      if (done) return
+      done = true
+      activeRec = null
+      document.removeEventListener('keydown', onShotKey, true)
+      bar.remove()
+      host.style.display = ''
+      document.addEventListener('keydown', onKey, true)
+      reshotBtn.disabled = false
+    }
+    // close() while re-shooting must not leave the bar behind.
+    activeRec = () => { if (done) return; done = true; document.removeEventListener('keydown', onShotKey, true); bar.remove() }
+
+    const take = async () => {
+      if (done || closed) return
+      let shot = ''
+      try { const res = await chrome.runtime.sendMessage({ type: 'TH_SHOT' }); if (res?.ok && res.shot) shot = res.shot as string } catch {}
+      const ctx = await requestBundle().catch(() => null)
+      finish()
+      if (closed) return
+      if (!shot) { setMsg('Не удалось снять кадр — попробуйте ещё раз', 'err'); return }
+      const ok = await ann.setImage(shot).then(() => { refresh(); return true }).catch(() => false)
+      if (ctx) context = ctx
+      setMsg(ok ? 'Кадр переснят ✓ — заметка и видео сохранены' : 'Кадр не загрузился', ok ? 'ok' : 'err')
+    }
+    const onShotKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); finish(); setMsg('Пересъёмка отменена') }
+      else if (e.key === 'Enter') { e.preventDefault(); void take() }
+    }
+    document.addEventListener('keydown', onShotKey, true)
+    broot.querySelectorAll('.stop').forEach((b) =>
+      b.addEventListener('click', () => {
+        if ((b as HTMLElement).dataset.x) { finish(); setMsg('Пересъёмка отменена') }
+        else void take()
+      }),
+    )
+  }
 
   // Explicit repro recording: hide this modal so the tester can reproduce the bug on the live page while a
   // floating bar records; Stop → fresh screenshot + attach the clip. Uses a DEDICATED recorder (its own
