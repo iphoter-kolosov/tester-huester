@@ -120,6 +120,11 @@ export async function POST(req: Request) {
   // The tab recording — an actual video of what the tester saw. Stored as-is (already codec-compressed).
   let videoUrl: string | null = null
   const videoSeconds = typeof body.videoSeconds === 'number' ? Math.round(body.videoSeconds) : null
+  const vt = body.videoTrim as { from?: unknown; to?: unknown } | undefined
+  const videoTrim =
+    vt && typeof vt.from === 'number' && typeof vt.to === 'number' && vt.to > vt.from
+      ? { from: Math.max(0, vt.from), to: vt.to }
+      : null
   if (typeof body.video === 'string' && body.video.startsWith('data:video/')) {
     try {
       videoUrl = await storage.putVideo(body.video)
@@ -153,6 +158,7 @@ export async function POST(req: Request) {
     replayUrl,
     videoUrl,
     videoSeconds,
+    videoTrim,
     type: asType(body.type),
     severity: asSeverity(body.severity),
   })

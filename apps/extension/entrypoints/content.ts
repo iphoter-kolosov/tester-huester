@@ -516,7 +516,11 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       clipBox.classList.add('on')
       clipQ.innerHTML = `🎬 Видео <b>${fmtT(video.seconds)}</b> · ${(video.bytes / 1e6).toFixed(1)} МБ — приложить?`
       clipSt.className = attach ? 'clipst' : 'clipst off'
-      clipSt.textContent = attach ? 'приложится к тикету' : 'не прикладывается'
+      clipSt.textContent = !attach
+        ? 'не прикладывается'
+        : trim
+          ? `приложится отрезок ${fmtT(trim.from)}–${fmtT(trim.to)} (${fmtT(Math.max(0, trim.to - trim.from))})`
+          : 'приложится целиком'
       return
     }
     const evs = replaySource()
@@ -552,6 +556,8 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     getMetaData: () => { totalTime: number }
   }
   let rep: Replayerish | null = null
+  let vid: HTMLVideoElement | null = null // the <video> when trimming a real recording
+  let isVideoEditor = false
   let edFit: (() => void) | null = null
   let edTimer: ReturnType<typeof setInterval> | null = null
   let edTotal = 0
@@ -562,7 +568,12 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   let edStartOff = 0
   let edPreviewTo = 0 // when previewing the selection, stop here
 
-  const edPos = () => (edPlaying ? Math.min(edTotal, edStartOff + (performance.now() - edStartWall) / 1000) : Number(edSeek.value) / 1000 * edTotal)
+  const edPos = () =>
+    isVideoEditor
+      ? (vid?.currentTime ?? 0)
+      : edPlaying
+        ? Math.min(edTotal, edStartOff + (performance.now() - edStartWall) / 1000)
+        : (Number(edSeek.value) / 1000) * edTotal
 
   function edPaint() {
     const pos = edPos()
@@ -578,12 +589,27 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
 
   function edSeekTo(sec: number, keepPlaying = false) {
     const s = Math.max(0, Math.min(edTotal, sec))
+    if (isVideoEditor) {
+      if (vid) vid.currentTime = s
+      edSeek.value = String(edTotal ? Math.round((s / edTotal) * 1000) : 0)
+      edPaint()
+      return
+    }
     if (keepPlaying && edPlaying) { edStartOff = s; edStartWall = performance.now(); rep?.play(s * 1000) }
     else { edPlaying = false; edPlay.textContent = '▶'; rep?.pause(s * 1000); edSeek.value = String(edTotal ? Math.round((s / edTotal) * 1000) : 0) }
     edPaint()
   }
 
   function edToggle(from?: number, until?: number) {
+    if (isVideoEditor) {
+      if (!vid) return
+      if (!vid.paused) { vid.pause(); return }
+      if (from != null) vid.currentTime = from
+      else if (vid.currentTime >= edTotal - 0.15) vid.currentTime = 0
+      edPreviewTo = until ?? 0
+      void vid.play()
+      return
+    }
     if (edPlaying) { edPlaying = false; edPlay.textContent = '▶'; rep?.pause(edPos() * 1000); return }
     const start = from ?? (edPos() >= edTotal - 0.15 ? 0 : edPos())
     edPreviewTo = until ?? 0
@@ -594,10 +620,50 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     rep?.play(start * 1000)
   }
 
+  // Trim the RECORDED VIDEO: a plain <video> with in/out marks. The editor used to show the DOM replay even
+  // after a video was recorded — two different mechanisms, and the DOM one is exactly the thing that plays
+  // back without the page's content. What you trim here is what you watched.
+  async function openVideoEditor() {
+    if (!video) return
+    attach = true
+    card.classList.add('editing')
+    document.removeEventListener('keydown', onKey, true)
+
+    edStage.innerHTML = ''
+    const v = document.createElement('video')
+    v.src = video.dataUrl
+    v.preload = 'metadata'
+    v.playsInline = true
+    v.style.cssText = 'display:block; width:100%; height:100%; object-fit:contain; background:#000;'
+    edStage.appendChild(v)
+    setMsg('')
+
+    edTotal = video.seconds || 0
+    edIn = trim ? trim.from : 0
+    edOut = trim ? trim.to : edTotal
+    isVideoEditor = true
+    vid = v
+
+    v.addEventListener('loadedmetadata', () => {
+      if (Number.isFinite(v.duration) && v.duration > 0) edTotal = v.duration
+      edOut = trim ? trim.to : edTotal
+      edPaint()
+    })
+    v.addEventListener('timeupdate', () => {
+      if (edPreviewTo && v.currentTime >= edPreviewTo) { v.pause(); edPreviewTo = 0 }
+      edPaint()
+    })
+    v.addEventListener('play', () => { edPlaying = true; edPlay.textContent = '⏸' })
+    v.addEventListener('pause', () => { edPlaying = false; edPlay.textContent = '▶' })
+    edPaint()
+  }
+
   async function openEditor() {
+    if (video) return openVideoEditor() // a real recording beats the DOM buffer
     const evs = replaySource()
     if (spanOf(evs) < 1) return
     attach = true
+    isVideoEditor = false
     card.classList.add('editing')
     document.removeEventListener('keydown', onKey, true) // the editor owns the keyboard while it is open
 
@@ -653,6 +719,10 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     if (edTimer) { clearInterval(edTimer); edTimer = null }
     if (edFit) { window.removeEventListener('resize', edFit); edFit = null }
     edPlaying = false
+    edPreviewTo = 0
+    try { vid?.pause() } catch {}
+    vid = null
+    isVideoEditor = false
     try { rep?.pause(); rep?.destroy?.() } catch {}
     rep = null
     edStage.removeAttribute('style')
@@ -893,7 +963,9 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     // Prepare the recording FIRST, so its real numbers (raw size, compressed size, why it was dropped) can ride
     // in the report's diagnostics. Previously diag was built before this and could only say "a clip existed",
     // which is exactly the gap that made "sometimes it doesn't save the screencast" un-diagnosable.
-    const sel = selectedClip()
+    // A recorded video supersedes the DOM buffer: shipping both wastes megabytes and the DOM one is precisely
+    // the artefact that plays back without the page's content.
+    const sel = video ? { events: [] as RREvent[], trim: undefined } : selectedClip()
     const replay = sel.events
     let replayPayload: RREvent[] | undefined
     let replayGz: string | undefined
@@ -971,6 +1043,9 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
           // The recorded tab video, when there is one — already webm-compressed, sent as-is.
           video: attach && video ? video.dataUrl : undefined,
           videoSeconds: attach && video ? Math.round(video.seconds) : undefined,
+          // The stretch chosen in the editor — the dashboard plays exactly this, so the reader sees the moment
+          // that matters instead of the whole run-up.
+          videoTrim: attach && video && trim ? { from: trim.from, to: trim.to } : undefined,
         },
       })
       if (res?.ok) {

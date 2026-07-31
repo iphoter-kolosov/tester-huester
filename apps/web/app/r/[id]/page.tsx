@@ -50,7 +50,7 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
       <CommentThread reportId={r.id} comments={comments} />
 
       {r.context ? <ReproContext context={r.context as ReproBundle} /> : null}
-      {r.videoUrl ? <VideoPlayer url={r.videoUrl} seconds={r.videoSeconds} /> : r.replayUrl ? <ReplayPlayer url={r.replayUrl} /> : null}
+      {r.videoUrl ? <VideoPlayer url={r.videoUrl} seconds={r.videoSeconds} trim={r.videoTrim} /> : r.replayUrl ? <ReplayPlayer url={r.replayUrl} /> : null}
     </main>
   )
 }
