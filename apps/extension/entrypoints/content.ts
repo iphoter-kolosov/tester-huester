@@ -186,9 +186,11 @@ const CSS = `
 .edhead { display: flex; align-items: center; gap: 10px; }
 .edttl { font-weight: 800; }
 .edhint { font-size: 11.5px; color: #8ea0bd; font-weight: 700; }
-/* size is computed to fit both axes (see edFit) — no max-height here, or the frame would be cropped again */
-.edstage { position: relative; background: #fff; border: 1px solid #223049; border-radius: 10px; overflow: hidden; }
-.edstage .replayer-wrapper { position: relative; transform-origin: top left; }
+/* The stage takes ALL the room the editor has left (it is the thing the tester is actually looking at), and
+   the recorded frame is scaled to fit inside it and centred. Sizing it from a fraction of the window made the
+   preview a 460x220 thumbnail of a 1536x735 recording — too small to tell what you were cutting. */
+.edstage { position: relative; flex: 1 1 auto; min-height: 220px; background: #fff; border: 1px solid #223049; border-radius: 10px; overflow: hidden; }
+.edstage .replayer-wrapper { position: absolute; top: 50%; left: 50%; transform-origin: center center; }
 .edstage iframe { border: 0; background: #fff; }
 /* rrweb's own stylesheet lives outside this shadow root, so the replayed cursor needs re-declaring here. */
 .edstage .replayer-mouse { position: absolute; width: 20px; height: 20px; margin: -10px 0 0 -10px; border-radius: 50%; background: rgba(10,132,255,.35); border: 2px solid #0a84ff; box-shadow: 0 0 0 2px rgba(255,255,255,.6); transition: left .12s linear, top .12s linear; z-index: 3; pointer-events: none; }
@@ -600,17 +602,21 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       // Fit BOTH axes: scaling by width alone let a tall page overflow the stage, so the tester saw only the
       // top-left part of what they were trimming. The stage is then sized to the scaled frame exactly (and
       // centred), so there is no dead space and nothing is cropped.
+      // Scale the recorded frame to whatever the stage actually is (CSS flex gives it the leftover space) and
+      // centre it. Reads the live box each time, so it stays correct on resize.
       edFit = () => {
-        if (!wrap) return
-        const availW = (edStage.parentElement?.clientWidth || edStage.clientWidth || 900) - 2
-        const availH = Math.max(220, window.innerHeight * 0.52)
-        const scale = Math.min(1, availW / w, availH / h)
-        wrap.style.transform = `scale(${scale})`
-        edStage.style.width = `${Math.round(w * scale)}px`
-        edStage.style.height = `${Math.round(h * scale)}px`
-        edStage.style.margin = '0 auto'
+        const wr = wrap ?? (edStage.querySelector('.replayer-wrapper') as HTMLElement | null)
+        if (!wr) return
+        const availW = edStage.clientWidth || 900
+        const availH = edStage.clientHeight || 400
+        const scale = Math.min(availW / w, availH / h) // may exceed 1: a small recording should fill the stage
+        wr.style.transform = `translate(-50%, -50%) scale(${scale})`
       }
       edFit()
+      // rrweb finishes laying the iframe out asynchronously; re-fit right after so the first frame is never
+      // left at the wrong size, and keep fitting while the editor is open.
+      requestAnimationFrame(() => edFit())
+      setTimeout(() => edFit(), 200)
       window.addEventListener('resize', edFit)
       edPaint()
       if (edTimer) clearInterval(edTimer)
