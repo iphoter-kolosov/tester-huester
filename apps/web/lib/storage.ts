@@ -9,6 +9,7 @@ import crypto from 'node:crypto'
 export interface Storage {
   put(dataUrl: string): Promise<string> // image data URL → served URL
   putJson(value: unknown): Promise<string> // arbitrary JSON blob (e.g. rrweb replay) → served URL
+  putVideo(dataUrl: string): Promise<string> // webm/mp4 data URL → served URL
 }
 
 // Shared with the /api/asset route so both agree on where bytes live.
@@ -33,6 +34,14 @@ class LocalDiskStorage implements Storage {
 
   async putJson(value: unknown): Promise<string> {
     return this.write(`${crypto.randomUUID()}.json`, Buffer.from(JSON.stringify(value), 'utf8'))
+  }
+
+  // The tab recording. Already codec-compressed, so it is written straight through — no re-encoding.
+  async putVideo(dataUrl: string): Promise<string> {
+    const m = /^data:(video\/[a-z0-9.+-]+)(;codecs=[^;,]+)?;base64,(.+)$/s.exec(dataUrl)
+    if (!m) throw new Error('not a video data URL')
+    const ext = m[1]!.includes('mp4') ? 'mp4' : 'webm'
+    return this.write(`${crypto.randomUUID()}.${ext}`, Buffer.from(m[3]!, 'base64'))
   }
 }
 

@@ -5,8 +5,10 @@ import { repo } from '@th/db'
 import RowControls from '@/components/RowControls'
 import EditableNote from '@/components/EditableNote'
 import CommentThread from '@/components/CommentThread'
+import CopyId from '@/components/CopyId'
 import ReproContext from '@/components/ReproContext'
 import ReplayPlayer from '@/components/ReplayPlayer'
+import VideoPlayer from '@/components/VideoPlayer'
 import { isAuthed } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
@@ -23,7 +25,7 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
       <Link className="back" href="/">← все тикеты</Link>
       <div className="h" style={{ marginTop: 10 }}>
         <span className="h1">
-          Тикет <span className="tidbig" title="Идентификатор — им ссылается агент; работает и в ссылке /r/{shortId}">#{r.shortId}</span>
+          Тикет <CopyId id={r.shortId} big />
           {r.archived ? <span className="archbadge">в архиве</span> : null}
         </span>
       </div>
@@ -43,12 +45,12 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
         <span className="k">Reporter</span><span>{r.reporter || '—'}</span>
         <span className="k">User agent</span><span style={{ color: 'var(--muted)' }}>{r.userAgent || '—'}</span>
         <span className="k">Created</span><span>{new Date(r.createdAt).toLocaleString()}</span>
-        <span className="k">ID</span><span style={{ color: 'var(--muted)' }}><b style={{ color: 'var(--accent)' }}>#{r.shortId}</b> · {r.id}</span>
+        <span className="k">ID</span><span style={{ color: 'var(--muted)' }}><CopyId id={r.shortId} /> · {r.id}</span>
       </div>
       <CommentThread reportId={r.id} comments={comments} />
 
       {r.context ? <ReproContext context={r.context as ReproBundle} /> : null}
-      {r.replayUrl ? <ReplayPlayer url={r.replayUrl} /> : null}
+      {r.videoUrl ? <VideoPlayer url={r.videoUrl} seconds={r.videoSeconds} /> : r.replayUrl ? <ReplayPlayer url={r.replayUrl} /> : null}
     </main>
   )
 }

@@ -79,6 +79,10 @@ function db(): DatabaseSync {
   // Archive: a two-stage safety for removal — archive first (reversible, hidden from the active board and from
   // agents), then hard-delete only from the archive.
   if (!columnExists(c, 'reports', 'archived')) c.exec('ALTER TABLE reports ADD COLUMN archived integer NOT NULL DEFAULT 0')
+  // A real recording of the tab (webm). This is the primary "what did you see" artefact; replay_url stays for
+  // older reports and for the small DOM buffer.
+  if (!columnExists(c, 'reports', 'video_url')) c.exec('ALTER TABLE reports ADD COLUMN video_url text')
+  if (!columnExists(c, 'reports', 'video_seconds')) c.exec('ALTER TABLE reports ADD COLUMN video_seconds integer')
   // Per-project read key: read-only, single-project scope for an agent (REST/MCP) — no dashboard cookie, no
   // write-capable ingest key. Added nullable, then backfilled for pre-existing projects.
   if (!columnExists(c, 'projects', 'read_key')) c.exec('ALTER TABLE projects ADD COLUMN read_key text')
@@ -114,7 +118,8 @@ export type Severity = 'low' | 'med' | 'high' | 'crit'
 export type Report = {
   id: string; shortId: string; projectId: string; note: string; screenshotUrl: string | null; pageUrl: string | null
   viewport: string | null; userAgent: string | null; reporter: string | null; status: string; createdAt: number
-  context: unknown | null; replayUrl: string | null; type: ReportType; severity: Severity | null; archived: boolean
+  context: unknown | null; replayUrl: string | null; videoUrl: string | null; videoSeconds: number | null
+  type: ReportType; severity: Severity | null; archived: boolean
 }
 
 // The human-facing handle for a ticket: short enough to say and paste, long enough to stay unique.
@@ -133,6 +138,7 @@ const toReport = (r: any): Report => ({
   id: r.id, shortId: shortId(r.id), projectId: r.project_id, note: r.note, screenshotUrl: r.screenshot_url, pageUrl: r.page_url,
   viewport: r.viewport, userAgent: r.user_agent, reporter: r.reporter, status: r.status, createdAt: r.created_at,
   context: parseJson(r.context), replayUrl: r.replay_url ?? null,
+  videoUrl: r.video_url ?? null, videoSeconds: r.video_seconds ?? null,
   type: (r.type ?? 'bug') as ReportType, severity: (r.severity ?? null) as Severity | null,
   archived: !!r.archived,
 })
@@ -150,6 +156,7 @@ export type NewReport = {
   projectId: string; note: string
   screenshotUrl?: string | null; pageUrl?: string | null; viewport?: string | null
   userAgent?: string | null; reporter?: string | null; context?: unknown | null; replayUrl?: string | null
+  videoUrl?: string | null; videoSeconds?: number | null
   type?: ReportType; severity?: Severity | null
 }
 
@@ -203,9 +210,9 @@ export const repo = {
   createReport(x: NewReport): Report {
     const id = crypto.randomUUID()
     db().prepare(
-      `INSERT INTO reports (id, project_id, note, screenshot_url, page_url, viewport, user_agent, reporter, status, created_at, context, replay_url, type, severity)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    ).run(id, x.projectId, x.note, x.screenshotUrl ?? null, x.pageUrl ?? null, x.viewport ?? null, x.userAgent ?? null, x.reporter ?? null, 'new', Date.now(), x.context != null ? JSON.stringify(x.context) : null, x.replayUrl ?? null, x.type ?? 'bug', x.severity ?? null)
+      `INSERT INTO reports (id, project_id, note, screenshot_url, page_url, viewport, user_agent, reporter, status, created_at, context, replay_url, video_url, video_seconds, type, severity)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(id, x.projectId, x.note, x.screenshotUrl ?? null, x.pageUrl ?? null, x.viewport ?? null, x.userAgent ?? null, x.reporter ?? null, 'new', Date.now(), x.context != null ? JSON.stringify(x.context) : null, x.replayUrl ?? null, x.videoUrl ?? null, x.videoSeconds ?? null, x.type ?? 'bug', x.severity ?? null)
     return this.getReport(id)!
   },
   // Backwards compatible: the old call site passed only `status`. New filters (projectId, type) are additive

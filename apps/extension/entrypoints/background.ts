@@ -74,6 +74,40 @@ export default defineBackground(() => {
   chrome.runtime.onInstalled.addListener(() => void warmUpAllTabs())
   chrome.runtime.onStartup.addListener(() => void warmUpAllTabs())
 
+  // ── real video recording of the tab ──────────────────────────────────────────────────────────────────
+  // getMediaStreamId must be called from the extension (not a content script), and the stream itself has to
+  // live in an offscreen document because a service worker cannot hold one. This is what produces an actual
+  // webm of what the tester saw, instead of a DOM event log.
+  async function ensureOffscreen(): Promise<void> {
+    const has = await chrome.offscreen?.hasDocument?.()
+    if (has) return
+    await chrome.offscreen.createDocument({
+      url: 'offscreen.html',
+      reasons: [chrome.offscreen.Reason.USER_MEDIA],
+      justification: 'Recording the tab to a video file for a bug report',
+    })
+  }
+
+  async function startVideo(tabId: number, maxSeconds?: number) {
+    try {
+      await ensureOffscreen()
+      const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId })
+      return await chrome.runtime.sendMessage({ type: 'TH_OFF_START', streamId, maxSeconds })
+    } catch (e) {
+      return { ok: false, error: String((e as Error)?.message || e) }
+    }
+  }
+
+  async function stopVideo() {
+    try {
+      const res = await chrome.runtime.sendMessage({ type: 'TH_OFF_STOP' })
+      try { await chrome.offscreen?.closeDocument?.() } catch {}
+      return res
+    } catch (e) {
+      return { ok: false, error: String((e as Error)?.message || e) }
+    }
+  }
+
   chrome.commands.onCommand.addListener((cmd) => {
     if (cmd === 'capture') capture()
   })
@@ -101,6 +135,16 @@ export default defineBackground(() => {
         .then((j) => sendResponse(j))
         .catch((e) => sendResponse({ ok: false, error: String(e) }))
       return true // keep the message channel open for the async response
+    }
+    if (msg?.type === 'TH_VIDEO_START') {
+      const tabId = sender.tab?.id
+      if (tabId == null) { sendResponse({ ok: false, error: 'no tab' }); return true }
+      startVideo(tabId, msg.maxSeconds).then(sendResponse)
+      return true
+    }
+    if (msg?.type === 'TH_VIDEO_STOP') {
+      stopVideo().then(sendResponse)
+      return true
     }
     if (msg?.type === 'TH_PROJECTS') {
       // The overlay's project picker: list the account's projects. Fetched from the background so it isn't

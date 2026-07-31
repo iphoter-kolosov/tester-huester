@@ -14,8 +14,10 @@ const CHECKOUT_MS = 60_000 // a fresh full snapshot every minute → clean trim 
 // keeps a typical repro to a SINGLE snapshot — playback fidelity beats fine-grained left-edge trimming.
 const CLIP_CHECKPOINT_MS = 120_000
 // The retrospective buffer is bounded by TIME, not by segment count: an idle tab produces few events, so
-// four segments could span seven minutes and claim to be "the last 2 minutes".
-const RETENTION_MS = 120_000
+// four segments could span seven minutes and claim to be "the last 2 minutes". It is now a small safety net
+// for CONTEXT only (the action trail lives elsewhere) — video comes from an explicit tab recording, so there
+// is no reason to keep minutes of DOM events in every tab.
+const RETENTION_MS = 30_000
 const MAX_SEGMENTS = 4 // bound memory: keep at most ~4 minutes retained
 const KEEP_SEGMENTS = 3 // on capture, hand back ~2–3 minutes
 const META = 4 // rrweb EventType.Meta

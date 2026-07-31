@@ -5,6 +5,7 @@ import type { ReproBundle } from '@th/core'
 import { repo, type Report } from '@th/db'
 import Filters from '@/components/Filters'
 import RowControls from '@/components/RowControls'
+import CopyId from '@/components/CopyId'
 import { isAuthed } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
@@ -165,7 +166,8 @@ export default async function Home({
 
           {rows.map((r) => {
             const badges = contextBadges(r.context) ?? []
-            if (r.replayUrl) badges.push({ t: '▶ replay' })
+            if (r.videoUrl) badges.push({ t: '🎥 видео' })
+            else if (r.replayUrl) badges.push({ t: '▶ replay' })
             const nComments = repo.countComments(r.id) // an agent's reply should be visible from the board
             return (
               <div className={'row' + (r.archived ? ' row-arch' : '')} key={r.id}>
@@ -176,7 +178,7 @@ export default async function Home({
                   <Link className={'note' + (r.note ? '' : ' empty2')} href={`/r/${r.id}`}>{r.note || 'без заметки'}</Link>
                   <div className="meta">
                     {/* The handle you and the agent use to refer to this ticket in words. */}
-                    <span className="tid" title="Идентификатор тикета — им ссылается агент">#{r.shortId}</span>
+                    <CopyId id={r.shortId} />
                     <span className="proj-tag">{projName.get(r.projectId) ?? 'project'}</span>
                     {nComments > 0 && <span className="cmtcount">💬 {nComments}</span>}
                     <span>{ago(r.createdAt)}</span>

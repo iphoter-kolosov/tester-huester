@@ -495,6 +495,9 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
 
   let attach = true // send the recording at all?
   let trim: { from: number; to: number } | null = null // chosen stretch (seconds from clip start), null = whole
+  // The recorded tab video (webm as a data URL). This is the primary recording now; the DOM buffer stays only
+  // as a small context fallback.
+  let video: { dataUrl: string; seconds: number; bytes: number } | null = null
 
   // The exact events Send will attach. Physically the clip starts at the checkpoint at/before `from` (a clip
   // must open on a snapshot); `replayTrim` rides alongside so the dashboard plays exactly the chosen stretch.
@@ -508,11 +511,19 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   }
 
   function updateClipPanel() {
+    // A recorded VIDEO takes precedence — it is what the tester asked for and what actually shows behaviour.
+    if (video) {
+      clipBox.classList.add('on')
+      clipQ.innerHTML = `🎬 Видео <b>${fmtT(video.seconds)}</b> · ${(video.bytes / 1e6).toFixed(1)} МБ — приложить?`
+      clipSt.className = attach ? 'clipst' : 'clipst off'
+      clipSt.textContent = attach ? 'приложится к тикету' : 'не прикладывается'
+      return
+    }
     const evs = replaySource()
     const total = spanOf(evs)
     if (total < 1) { clipBox.classList.remove('on'); return }
     clipBox.classList.add('on')
-    clipQ.innerHTML = `🎬 Есть запись <b>${fmtT(total)}</b> — приложить к тикету?`
+    clipQ.innerHTML = `🎬 Есть черновая запись <b>${fmtT(total)}</b> (последние 30 с) — приложить?`
     if (!attach) {
       clipSt.className = 'clipst off'
       clipSt.textContent = 'не прикладывается'
@@ -780,7 +791,15 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   async function recordRepro() {
     if (closed || activeRec) return
     recBtn.disabled = true
-    if (!startExplicitClip()) { setMsg('Не удалось начать запись на этой странице', 'err'); recBtn.disabled = false; return }
+
+    // Record the tab as VIDEO. A DOM replay reconstructs markup, which for app-heavy pages plays back as
+    // "some other layer of the site plus a moving cursor" — useless for behavioural bugs. This records pixels.
+    const started = await chrome.runtime.sendMessage({ type: 'TH_VIDEO_START', maxSeconds: 300 }).catch((e) => ({ ok: false, error: String(e) }))
+    if (!started?.ok) {
+      setMsg('Не удалось начать запись экрана: ' + (started?.error || 'нет доступа к вкладке'), 'err')
+      recBtn.disabled = false
+      return
+    }
 
     host.style.display = 'none' // free the page for interaction; keep this overlay instance to reuse on Stop
     document.removeEventListener('keydown', onKey, true)
@@ -793,8 +812,8 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     document.documentElement.appendChild(bar)
 
     const tmEl = broot.querySelector('.tm') as HTMLElement
-    // Tick off the RECORDER's own span, not wall-clock — the number the tester sees is the clip they will get.
-    const iv = setInterval(() => { const s = Math.floor(clipSeconds()); tmEl.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` }, 250)
+    const t0 = Date.now()
+    const iv = setInterval(() => { const s = Math.floor((Date.now() - t0) / 1000); tmEl.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}` }, 250)
 
     let done = false
     const teardown = () => {
@@ -802,40 +821,45 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       document.removeEventListener('keydown', onBarKey, true)
       bar.remove()
     }
-    // close() during a recording routes here: stop the recorder, drop the bar, leave nothing behind.
-    activeRec = () => { if (done) return; done = true; teardown(); stopExplicitClip() }
+    // close() during a recording routes here: stop the tab recording, drop the bar, leave nothing behind.
+    activeRec = () => { if (done) return; done = true; teardown(); void chrome.runtime.sendMessage({ type: 'TH_VIDEO_STOP' }).catch(() => {}) }
 
     const onBarKey = (e: KeyboardEvent) => { if (e.key === 'Escape') { e.preventDefault(); void stop() } }
     const stop = async () => {
       if (done || closed) return
       done = true
       activeRec = null
-      const clip = stopExplicitClip()
       teardown()
 
+      const res = await chrome.runtime.sendMessage({ type: 'TH_VIDEO_STOP' }).catch((e) => ({ ok: false, error: String(e) }))
       let freshShot = ''
-      try { const res = await chrome.runtime.sendMessage({ type: 'TH_SHOT' }); if (res?.ok && res.shot) freshShot = res.shot as string } catch {}
+      try { const s = await chrome.runtime.sendMessage({ type: 'TH_SHOT' }); if (s?.ok && s.shot) freshShot = s.shot as string } catch {}
       const ctx = await requestBundle().catch(() => null)
       if (closed) return // the tester closed the overlay while we were awaiting — never resurrect it
 
       let shotOk = false
-      if (freshShot) shotOk = await ann.setImage(freshShot).then(() => { refresh(); return true }).catch(() => false)
+      // Keep the tester's markup: they may have annotated BEFORE going off to record the repro.
+      if (freshShot) shotOk = await ann.setImage(freshShot, true).then(() => { refresh(); return true }).catch(() => false)
       if (ctx) context = ctx // end-of-repro context: the trail/console/net now includes the reproduction
 
-      replaySource = () => clip
       host.style.display = ''
       document.addEventListener('keydown', onKey, true)
-      // A fresh clip resets the trim to "all of it" — the tester narrows down from there if they want to.
-      // A fresh clip supersedes any previous choice: attach it whole until the tester says otherwise.
-      attach = true
-      trim = null
-      updateRec()
-      updateClipPanel()
 
-      const dur = fmtDur(spanOf(clip))
-      if (clip.length < 2) setMsg('Запись не получилась — попробуйте ещё раз', 'err')
-      else if (!shotOk) setMsg(`Репро записано: ${dur} ✓ — но скриншот не обновился (кадр до репро)`, 'warn')
-      else setMsg(`Репро записано: ${dur} ✓ — допишите заметку и Send`, 'ok')
+      if (res?.ok && res.dataUrl) {
+        video = { dataUrl: res.dataUrl as string, seconds: Number(res.seconds || 0), bytes: Number(res.bytes || 0) }
+        attach = true
+        updateClipPanel()
+        const dur = fmtDur(video.seconds)
+        const mb = (video.bytes / 1e6).toFixed(1)
+        setMsg(
+          shotOk ? `Видео записано: ${dur} · ${mb} МБ ✓ — допишите заметку и Send`
+                 : `Видео записано: ${dur} · ${mb} МБ ✓ (скриншот не обновился)`,
+          'ok',
+        )
+      } else {
+        setMsg('Запись не получилась: ' + (res?.error || 'пустой файл'), 'err')
+        updateClipPanel()
+      }
       recBtn.disabled = false
     }
     document.addEventListener('keydown', onBarKey, true)
@@ -937,7 +961,17 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       const res = await chrome.runtime.sendMessage({
         type: 'TH_SEND',
         collectorUrl: cfg.collectorUrl,
-        payload: { ...payload, replay: replayPayload, replayGz, replayEvents: replay.length, replayBytes, replayTrim: sel.trim },
+        payload: {
+          ...payload,
+          replay: replayPayload,
+          replayGz,
+          replayEvents: replay.length,
+          replayBytes,
+          replayTrim: sel.trim,
+          // The recorded tab video, when there is one — already webm-compressed, sent as-is.
+          video: attach && video ? video.dataUrl : undefined,
+          videoSeconds: attach && video ? Math.round(video.seconds) : undefined,
+        },
       })
       if (res?.ok) {
         // Never let a green "sent" paper over a dropped recording — the tester must know what actually landed.

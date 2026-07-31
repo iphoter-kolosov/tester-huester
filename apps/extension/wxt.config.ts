@@ -12,7 +12,9 @@ export default defineConfig({
   manifest: {
     name: 'tester-huester',
     description: 'Capture a QA note (screenshot + drawing) on any site → your dashboard.',
-    permissions: ['activeTab', 'tabs', 'storage', 'scripting'],
+    // tabCapture + offscreen: record the tab as an actual VIDEO stream (webm) rather than a DOM event log.
+    // A DOM replay reconstructs markup, which is useless for the behavioural bugs this tool exists to capture.
+    permissions: ['activeTab', 'tabs', 'storage', 'scripting', 'tabCapture', 'offscreen'],
     host_permissions: ['<all_urls>'],
     commands: {
       capture: {

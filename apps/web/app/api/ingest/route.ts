@@ -117,6 +117,17 @@ export async function POST(req: Request) {
     }
   }
 
+  // The tab recording — an actual video of what the tester saw. Stored as-is (already codec-compressed).
+  let videoUrl: string | null = null
+  const videoSeconds = typeof body.videoSeconds === 'number' ? Math.round(body.videoSeconds) : null
+  if (typeof body.video === 'string' && body.video.startsWith('data:video/')) {
+    try {
+      videoUrl = await storage.putVideo(body.video)
+    } catch (e) {
+      console.warn('ingest: video store failed:', e)
+    }
+  }
+
   // Record what the SERVER actually received, next to what the extension reported sending. When a replay goes
   // missing, these two halves together say whether it was never sent, arrived broken, or failed to store.
   const context = sanitizeContext(body.context)
@@ -125,6 +136,8 @@ export async function POST(req: Request) {
       received: replayEvents ? replayEvents.length : 0,
       compressed: typeof body.replayGz === 'string' ? body.replayGz.length : 0,
       stored: !!replayUrl,
+      video: !!videoUrl,
+      videoSeconds,
     })
   }
 
@@ -138,6 +151,8 @@ export async function POST(req: Request) {
     reporter: clip(body.reporter, 200),
     context,
     replayUrl,
+    videoUrl,
+    videoSeconds,
     type: asType(body.type),
     severity: asSeverity(body.severity),
   })

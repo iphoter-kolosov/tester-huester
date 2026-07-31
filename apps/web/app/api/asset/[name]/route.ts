@@ -9,13 +9,15 @@ export const dynamic = 'force-dynamic'
 // Serves runtime-written blobs (screenshots, replay JSON) from the data dir. This is what makes uploads work
 // in production — `public/` won't serve files written after build. Name is strictly validated to block any
 // path traversal; only a bare `<uuid>.<ext>` is accepted.
-const SAFE = /^[a-zA-Z0-9_-]+\.(png|jpg|jpeg|webp|json)$/
+const SAFE = /^[a-zA-Z0-9_-]+\.(png|jpg|jpeg|webp|json|webm|mp4)$/
 const TYPES: Record<string, string> = {
   png: 'image/png',
   jpg: 'image/jpeg',
   jpeg: 'image/jpeg',
   webp: 'image/webp',
   json: 'application/json',
+  webm: 'video/webm',
+  mp4: 'video/mp4',
 }
 
 export async function GET(_req: Request, { params }: { params: Promise<{ name: string }> }) {

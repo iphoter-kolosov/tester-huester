@@ -110,26 +110,31 @@ export class ImageAnnotator {
   }
 
   // Browser entry: decode a data URL, then apply it. (Tests call applyImage directly with a stub.)
-  setImage(dataUrl: string): Promise<void> {
+  // `keepAnnotations` swaps only the backdrop: the tester's arrows and notes survive. Used when the overlay
+  // refreshes the screenshot mid-session (after recording a repro) — losing their markup there is a real loss
+  // of work, not a cosmetic reset.
+  setImage(dataUrl: string, keepAnnotations = false): Promise<void> {
     return new Promise((resolve, reject) => {
       const im = new Image()
-      im.onload = () => { this.applyImage(im, im.naturalWidth, im.naturalHeight); resolve() }
+      im.onload = () => { this.applyImage(im, im.naturalWidth, im.naturalHeight, keepAnnotations); resolve() }
       im.onerror = () => reject(new Error('image decode failed'))
       im.src = dataUrl
     })
   }
 
-  applyImage(src: Drawable, naturalW: number, naturalH: number): void {
+  applyImage(src: Drawable, naturalW: number, naturalH: number, keepAnnotations = false): void {
     const scale = Math.min(1, Math.sqrt(MAXPX / Math.max(1, naturalW * naturalH)))
     this.canvas.width = Math.max(1, Math.round(naturalW * scale))
     this.canvas.height = Math.max(1, Math.round(naturalH * scale))
     this.img = src
-    this.prims = []
-    this.undoStack = []
-    this.redoStack = []
+    if (!keepAnnotations) {
+      this.prims = []
+      this.undoStack = []
+      this.redoStack = []
+      this.tool = 'rect'
+    }
     this.cropRect = null
     this.current = null
-    this.tool = 'rect'
     this.redraw()
     this.onChange()
   }

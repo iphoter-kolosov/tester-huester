@@ -219,3 +219,16 @@ a { color: inherit; text-decoration: none; }
 .rcbtn:hover { border-color: var(--accent); }
 .rct { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; min-width: 34px; }
 .rcrange { flex: 1; accent-color: var(--accent); cursor: pointer; }
+
+/* click-to-copy ticket handle */
+.tidcopy { display: inline-flex; align-items: center; gap: 5px; background: transparent; cursor: pointer; font-family: ui-monospace, Menlo, Consolas, monospace; }
+.tidcopy:hover { border-color: var(--accent); color: var(--accent); }
+.tidcopy.copied { color: var(--fixed); border-color: color-mix(in srgb, var(--fixed) 45%, var(--border)); }
+.tidmark { opacity: .55; font-size: .85em; }
+.tidcopy:hover .tidmark { opacity: 1; }
+button.tidbig { border: 0; padding: 0; }
+
+/* recorded tab video */
+.vplayer { display: block; width: 100%; max-height: 76vh; background: #000; border-top: 1px solid var(--border); }
+.vdl { margin-left: 10px; color: var(--accent); }
+.vdl:hover { text-decoration: underline; }
