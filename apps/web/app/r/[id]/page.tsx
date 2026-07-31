@@ -14,7 +14,7 @@ export const dynamic = 'force-dynamic'
 export default async function ReportDetail({ params }: { params: Promise<{ id: string }> }) {
   if (!(await isAuthed())) redirect('/login')
   const { id } = await params
-  const r = repo.getReport(id)
+  const r = repo.resolveReport(id)
   if (!r) notFound()
   const projOpts = repo.listProjects().map((p) => ({ value: p.id, label: p.name }))
   const comments = repo.listComments(r.id)
@@ -22,7 +22,10 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
     <main className="wrap">
       <Link className="back" href="/">← все тикеты</Link>
       <div className="h" style={{ marginTop: 10 }}>
-        <span className="h1">Тикет{r.archived ? <span className="archbadge">в архиве</span> : null}</span>
+        <span className="h1">
+          Тикет <span className="tidbig" title="Идентификатор — им ссылается агент; работает и в ссылке /r/{shortId}">#{r.shortId}</span>
+          {r.archived ? <span className="archbadge">в архиве</span> : null}
+        </span>
       </div>
 
       <div className="dctl">
@@ -40,7 +43,7 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
         <span className="k">Reporter</span><span>{r.reporter || '—'}</span>
         <span className="k">User agent</span><span style={{ color: 'var(--muted)' }}>{r.userAgent || '—'}</span>
         <span className="k">Created</span><span>{new Date(r.createdAt).toLocaleString()}</span>
-        <span className="k">ID</span><span style={{ color: 'var(--muted)' }}>{r.id}</span>
+        <span className="k">ID</span><span style={{ color: 'var(--muted)' }}><b style={{ color: 'var(--accent)' }}>#{r.shortId}</b> · {r.id}</span>
       </div>
       <CommentThread reportId={r.id} comments={comments} />
 

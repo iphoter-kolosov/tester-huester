@@ -12,7 +12,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const { id } = await params
   const r = resolveProjectKey(req)
   if ('error' in r) return r.error
-  const report = repo.getReport(id)
+  const report = repo.resolveReport(id)
   if (!report || report.projectId !== r.project.id) {
     return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
   }

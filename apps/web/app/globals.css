@@ -52,6 +52,9 @@ a { color: inherit; text-decoration: none; }
 .npbtn:hover { border-color: var(--accent); }
 .pmove { appearance: none; border: 1px solid var(--border); background: var(--panel2); color: var(--muted); border-radius: 8px; padding: 4px 9px; font-size: 11px; font-weight: 600; cursor: pointer; max-width: 130px; }
 .pmove:hover { color: var(--text); border-color: var(--accent); }
+/* ticket handle — what the agent and the human say out loud when they mean this ticket */
+.tid { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11px; font-weight: 700; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border)); border-radius: 6px; padding: 1px 6px; user-select: all; }
+.tidbig { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 15px; color: var(--accent); user-select: all; }
 .proj-tag { font-size: 10.5px; font-weight: 700; color: var(--muted); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
 .projempty { color: var(--muted); font-style: italic; font-size: 13px; padding: 8px 4px 4px; }
 

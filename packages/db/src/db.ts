@@ -112,10 +112,13 @@ export type Project = { id: string; name: string; ingestKey: string; readKey: st
 export type ReportType = 'feature' | 'bug' | 'fix' | 'text'
 export type Severity = 'low' | 'med' | 'high' | 'crit'
 export type Report = {
-  id: string; projectId: string; note: string; screenshotUrl: string | null; pageUrl: string | null
+  id: string; shortId: string; projectId: string; note: string; screenshotUrl: string | null; pageUrl: string | null
   viewport: string | null; userAgent: string | null; reporter: string | null; status: string; createdAt: number
   context: unknown | null; replayUrl: string | null; type: ReportType; severity: Severity | null; archived: boolean
 }
+
+// The human-facing handle for a ticket: short enough to say and paste, long enough to stay unique.
+export const shortId = (id: string): string => (id || '').replace(/-/g, '').slice(0, 8)
 
 export type EventKind = 'created' | 'status' | 'edited' | 'comment' | 'archived' | 'moved'
 export type ChangeEvent = { seq: number; projectId: string; reportId: string; kind: EventKind; actor: string; detail: string | null; createdAt: number }
@@ -127,7 +130,7 @@ export type Comment = { id: string; reportId: string; author: string; authorKind
 const toProject = (r: any): Project => ({ id: r.id, name: r.name, ingestKey: r.ingest_key, readKey: r.read_key ?? '', createdAt: r.created_at })
 const toComment = (r: any): Comment => ({ id: r.id, reportId: r.report_id, author: r.author, authorKind: (r.author_kind ?? 'human') as AuthorKind, body: r.body, createdAt: r.created_at })
 const toReport = (r: any): Report => ({
-  id: r.id, projectId: r.project_id, note: r.note, screenshotUrl: r.screenshot_url, pageUrl: r.page_url,
+  id: r.id, shortId: shortId(r.id), projectId: r.project_id, note: r.note, screenshotUrl: r.screenshot_url, pageUrl: r.page_url,
   viewport: r.viewport, userAgent: r.user_agent, reporter: r.reporter, status: r.status, createdAt: r.created_at,
   context: parseJson(r.context), replayUrl: r.replay_url ?? null,
   type: (r.type ?? 'bug') as ReportType, severity: (r.severity ?? null) as Severity | null,
@@ -223,6 +226,19 @@ export const repo = {
   getReport(id: string): Report | null {
     const r = db().prepare('SELECT * FROM reports WHERE id = ?').get(id)
     return r ? toReport(r) : null
+  },
+  // Accept the SHORT id everywhere a full one works. Humans and agents refer to a ticket by its first few
+  // characters (that is what fits in a sentence); resolving it here means the short form is a real identifier
+  // instead of something the agent improvises. Ambiguous prefixes resolve to nothing rather than the wrong
+  // ticket — being told "not found" is recoverable, acting on someone else's ticket is not.
+  resolveReport(idOrShort: string): Report | null {
+    const s = (idOrShort || '').trim().replace(/^#/, '').toLowerCase()
+    if (!s) return null
+    const exact = this.getReport(s)
+    if (exact) return exact
+    if (s.length < 4) return null
+    const rows = db().prepare('SELECT * FROM reports WHERE id LIKE ? LIMIT 2').all(s + '%')
+    return rows.length === 1 ? toReport(rows[0]) : null
   },
   setStatus(id: string, status: string): boolean {
     return db().prepare('UPDATE reports SET status = ? WHERE id = ?').run(status, id).changes > 0

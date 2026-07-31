@@ -13,7 +13,7 @@ const MAX_BODY = 4000
 //   • Human — the dashboard cookie; may read and post anywhere, and delete.
 async function resolve(req: Request, id: string) {
   const projectKey = new URL(req.url).searchParams.get('projectKey') || ''
-  const report = repo.getReport(id)
+  const report = repo.resolveReport(id)
   if (!report) return { error: NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 }) }
 
   if (projectKey) {
@@ -22,17 +22,17 @@ async function resolve(req: Request, id: string) {
     if (report.projectId !== project.id) {
       return { error: NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 }) }
     }
-    return { author: project.name, kind: 'agent' as const }
+    return { author: project.name, kind: 'agent' as const, report }
   }
   if (!(await isAuthed())) return { error: NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 }) }
-  return { author: 'Вы', kind: 'human' as const }
+  return { author: 'Вы', kind: 'human' as const, report }
 }
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   const r = await resolve(req, id)
   if ('error' in r) return r.error
-  return NextResponse.json({ ok: true, comments: repo.listComments(id) })
+  return NextResponse.json({ ok: true, comments: repo.listComments(r.report.id) })
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -49,13 +49,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const text = String(body.body ?? '').trim().slice(0, MAX_BODY)
   if (!text) return NextResponse.json({ ok: false, error: 'empty' }, { status: 400 })
 
-  const comment = repo.addComment({ reportId: id, author: r.author, authorKind: r.kind, body: text })
+  const comment = repo.addComment({ reportId: r.report.id, author: r.author, authorKind: r.kind, body: text })
   // Journalled so the other side notices without polling the whole board — this is how an agent learns the
   // reporter answered it.
-  const report = repo.getReport(id)
-  if (report) {
-    repo.logEvent({ projectId: report.projectId, reportId: id, kind: 'comment', actor: r.kind === 'agent' ? r.author : 'human', detail: text.slice(0, 200) })
-  }
+  repo.logEvent({ projectId: r.report.projectId, reportId: r.report.id, kind: 'comment', actor: r.kind === 'agent' ? r.author : 'human', detail: text.slice(0, 200) })
   return NextResponse.json({ ok: true, comment })
 }
 

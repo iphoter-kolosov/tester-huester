@@ -175,6 +175,8 @@ export default async function Home({
                 <div className="mid">
                   <Link className={'note' + (r.note ? '' : ' empty2')} href={`/r/${r.id}`}>{r.note || 'без заметки'}</Link>
                   <div className="meta">
+                    {/* The handle you and the agent use to refer to this ticket in words. */}
+                    <span className="tid" title="Идентификатор тикета — им ссылается агент">#{r.shortId}</span>
                     <span className="proj-tag">{projName.get(r.projectId) ?? 'project'}</span>
                     {nComments > 0 && <span className="cmtcount">💬 {nComments}</span>}
                     <span>{ago(r.createdAt)}</span>

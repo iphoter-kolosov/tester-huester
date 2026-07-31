@@ -14,13 +14,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const { id } = await params
   const r = resolveProjectKey(req)
   if ('error' in r) return r.error
-  const report = repo.getReport(id)
+  const report = repo.resolveReport(id)
   if (!report || report.projectId !== r.project.id) {
     return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
   }
   // Comments ride along so an agent picking the ticket up sees the whole conversation — its own earlier notes
   // and the human's replies — without a second call.
-  return NextResponse.json({ ok: true, report, comments: repo.listComments(id) })
+  return NextResponse.json({ ok: true, report, comments: repo.listComments(report.id) })
 }
 
 // Write endpoint with two authorized callers:
@@ -48,12 +48,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     if (!STATUSES.includes(status)) {
       return NextResponse.json({ ok: false, error: 'bad_status' }, { status: 400 })
     }
-    const report = repo.getReport(id)
+    const report = repo.resolveReport(id)
     if (!report || report.projectId !== project.id) {
       return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
     }
-    const ok = repo.setStatus(id, status)
-    if (ok) repo.logEvent({ projectId: report.projectId, reportId: id, kind: 'status', actor: project.name, detail: `${report.status} → ${status}` })
+    const ok = repo.setStatus(report.id, status)
+    if (ok) repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'status', actor: project.name, detail: `${report.status} → ${status}` })
     return NextResponse.json({ ok }, { status: ok ? 200 : 404 })
   }
 
@@ -61,25 +61,25 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   if (!(await isAuthed())) {
     return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
   }
-  const before = repo.getReport(id)
+  const before = repo.resolveReport(id)
   if (!before) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
   // Every human edit is journalled, so the agent watching this project sees it on its next (cheap) poll —
   // including which project the ticket moved to, since that changes who owns it.
   const log = (kind: 'status' | 'edited' | 'archived' | 'moved', detail: string, projectId = before.projectId) =>
-    repo.logEvent({ projectId, reportId: id, kind, actor: 'human', detail })
+    repo.logEvent({ projectId, reportId: before.id, kind, actor: 'human', detail })
 
   let touched = false
   if ('status' in body) {
     const status = String(body.status || '')
     if (!STATUSES.includes(status)) return NextResponse.json({ ok: false, error: 'bad_status' }, { status: 400 })
-    if (!repo.setStatus(id, status)) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
+    if (!repo.setStatus(before.id, status)) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
     log('status', `${before.status} → ${status}`)
     touched = true
   }
   if ('projectId' in body) {
     const pid = String(body.projectId || '')
     if (!repo.getProjectById(pid)) return NextResponse.json({ ok: false, error: 'bad_project' }, { status: 400 })
-    if (!repo.moveReport(id, pid)) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
+    if (!repo.moveReport(before.id, pid)) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
     log('moved', 'ticket moved out of this project')
     if (pid !== before.projectId) log('moved', 'ticket moved into this project', pid)
     touched = true
@@ -87,25 +87,25 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   if ('type' in body) {
     const type = String(body.type || '')
     if (!TYPES.includes(type)) return NextResponse.json({ ok: false, error: 'bad_type' }, { status: 400 })
-    if (!repo.updateReport(id, { type: type as ReportType })) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
+    if (!repo.updateReport(before.id, { type: type as ReportType })) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
     log('edited', `type: ${before.type} → ${type}`)
     touched = true
   }
   if ('severity' in body) {
     const sev = String(body.severity || '')
     if (!SEVERITIES.includes(sev)) return NextResponse.json({ ok: false, error: 'bad_severity' }, { status: 400 })
-    if (!repo.updateReport(id, { severity: sev as Severity })) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
+    if (!repo.updateReport(before.id, { severity: sev as Severity })) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
     log('edited', `severity: ${before.severity ?? '—'} → ${sev}`)
     touched = true
   }
   if ('note' in body) {
     const note = String(body.note ?? '').slice(0, 5000)
-    if (!repo.updateReport(id, { note })) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
+    if (!repo.updateReport(before.id, { note })) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
     log('edited', `note edited: ${note.slice(0, 120)}`)
     touched = true
   }
   if ('archived' in body) {
-    if (!repo.setArchived(id, !!body.archived)) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
+    if (!repo.setArchived(before.id, !!body.archived)) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
     log('archived', body.archived ? 'archived' : 'restored from archive')
     touched = true
   }
@@ -122,9 +122,9 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
     return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
   }
   const { id } = await params
-  const r = repo.getReport(id)
+  const r = repo.resolveReport(id)
   if (!r) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
   if (!r.archived) return NextResponse.json({ ok: false, error: 'archive_first' }, { status: 409 })
-  const ok = repo.deleteReport(id)
+  const ok = repo.deleteReport(r.id)
   return NextResponse.json({ ok }, { status: ok ? 200 : 404 })
 }
