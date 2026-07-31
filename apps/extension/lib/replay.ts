@@ -9,7 +9,13 @@ import { replayHealth, replaySpanSeconds } from '@th/core/replay-health'
 export type RREvent = { type: number; timestamp: number; data?: unknown }
 
 const CHECKOUT_MS = 60_000 // a fresh full snapshot every minute → clean trim boundaries
-const CLIP_CHECKPOINT_MS = 30_000 // explicit clips: checkpoint cadence = trim granularity on the left edge
+// Explicit clips:每 checkpoint is a whole new DOM snapshot, and a clip stitched from many of them replays
+// badly (rrweb rebuilds the tree at each one; scrubbing across them can land on an empty frame). Two minutes
+// keeps a typical repro to a SINGLE snapshot — playback fidelity beats fine-grained left-edge trimming.
+const CLIP_CHECKPOINT_MS = 120_000
+// The retrospective buffer is bounded by TIME, not by segment count: an idle tab produces few events, so
+// four segments could span seven minutes and claim to be "the last 2 minutes".
+const RETENTION_MS = 120_000
 const MAX_SEGMENTS = 4 // bound memory: keep at most ~4 minutes retained
 const KEEP_SEGMENTS = 3 // on capture, hand back ~2–3 minutes
 const META = 4 // rrweb EventType.Meta
@@ -59,6 +65,14 @@ export function startReplay(): void {
         if (isCheckout && event.type === META) {
           matrix.push([])
           if (matrix.length > MAX_SEGMENTS) matrix.shift()
+          // Drop whole segments that fell out of the retention window, so the buffer really is "the last
+          // ~2 minutes" and not however long four idle segments happen to cover.
+          while (matrix.length > 1) {
+            const seg = matrix[0]!
+            const last = seg[seg.length - 1]
+            if (last && event.timestamp - last.timestamp > RETENTION_MS) matrix.shift()
+            else break
+          }
         }
         matrix[matrix.length - 1]!.push(event)
       },
@@ -75,6 +89,19 @@ export function startReplay(): void {
     lastError = 'record() threw: ' + String((e as Error)?.message || e).slice(0, 200)
     console.warn('[th] replay recorder failed to start:', e)
   }
+}
+
+// Record only the tab the tester is actually looking at. A bug is reproduced in the foreground, so recording
+// every background tab buys nothing and costs a MutationObserver + listeners in each of them. Hidden → stop,
+// visible again → start fresh (a new snapshot, so the buffer stays self-consistent).
+export function bindVisibility(doc: Document = document): void {
+  const onVis = () => {
+    if (isClipRecording()) return // an explicit recording owns the page; never interrupt it
+    if (doc.visibilityState === 'hidden') stopReplay()
+    else startReplay()
+  }
+  doc.addEventListener('visibilitychange', onVis)
+  if (doc.visibilityState === 'hidden') stopReplay()
 }
 
 export function stopReplay(): void {

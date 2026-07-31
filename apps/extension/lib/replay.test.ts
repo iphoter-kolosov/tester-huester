@@ -130,4 +130,20 @@ const mutation = (refs: number[], ts: number): RREvent => ({
   assert.equal(clipHealth(whole.events).playable, true)
 }
 
+// 11. A clip must open on exactly ONE snapshot to replay reliably: stitching many checkpoints is what made a
+//     long recording scrub to an empty frame. Guard the invariant that a trimmed clip carries a single
+//     Meta+FullSnapshot head and no further snapshots before its end.
+{
+  const clip: RREvent[] = [
+    e(META, 0), snapEvent([1, 2, 3], 0),
+    mutation([2], 10_000), mutation([3], 20_000),
+    e(META, 120_000), snapEvent([1, 2, 3], 120_000), // next checkpoint, 2 minutes in
+    mutation([2], 130_000),
+  ]
+  const head = trimClip(clip, 0, 60)
+  const snapsInHead = head.events.filter((x) => x.type === FULL).length
+  assert.equal(snapsInHead, 1, 'a clip trimmed within one checkpoint window carries a single snapshot')
+  assert.equal(clipHealth(head.events).playable, true, 'single-snapshot clip is playable')
+}
+
 console.log('extension: replay buffer tests passed ✓')

@@ -4,7 +4,7 @@ import { getConfig, setConfig } from '@/lib/config'
 import { buildReport, type ReportType, type Severity } from '@/lib/report'
 import { requestBundle } from '@/lib/bridge'
 import {
-  startReplay, snapshotReplay, startExplicitClip, stopExplicitClip, clipSeconds,
+  startReplay, bindVisibility, snapshotReplay, startExplicitClip, stopExplicitClip, clipSeconds,
   spanSeconds, recorderDiag, trimClip, trimPoints, REPLAY_BLOCK_CLASS, type RREvent,
 } from '@/lib/replay'
 
@@ -23,7 +23,13 @@ export default defineContentScript({
 
     // Start buffering the last ~2 min of DOM replay immediately (opt-out via popup). Runs in the isolated
     // world but observes the shared DOM, which is all rrweb needs.
-    getConfig().then((c) => { if (c.recordReplay) startReplay() }).catch(() => {})
+    getConfig()
+      .then((c) => {
+        if (!c.recordReplay) return
+        startReplay()
+        bindVisibility() // only the foreground tab records — background tabs cost nothing
+      })
+      .catch(() => {})
 
     let open = false
     chrome.runtime.onMessage.addListener((msg) => {
