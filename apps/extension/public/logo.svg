@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- tester-huester mark: a lipstick-red mouth. Reads as "tell me what's wrong" (the tool is about reporting),
+       carries the name's cheek, and stays legible at 16px because it is one bold silhouette with a single
+       horizontal split — no thin strokes, no text, no detail that dies when scaled down. -->
+  <defs>
+    <linearGradient id="lip" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ff6b5e"/>
+      <stop offset="55%" stop-color="#ff3b30"/>
+      <stop offset="100%" stop-color="#c81e26"/>
+    </linearGradient>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1b2438"/>
+      <stop offset="100%" stop-color="#0d1322"/>
+    </linearGradient>
+    <radialGradient id="gloss" cx="0.35" cy="0.28" r="0.5">
+      <stop offset="0" stop-color="#fff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#fff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+
+  <!-- Scaled up around the centre so the mark fills the tile: at 16px every wasted pixel of padding costs
+       legibility. The cupid's bow is exaggerated for the same reason — it is what makes the shape read as a
+       mouth rather than a blob. -->
+  <g transform="translate(64,66) scale(1.16) translate(-64,-62)">
+    <!-- upper lip: cupid's bow -->
+    <path fill="url(#lip)" d="
+      M16 58
+      C27 36 43 27 55 37
+      C59 41 61 45 64 45
+      C67 45 69 41 73 37
+      C85 27 101 36 112 58
+      C94 51 77 49 64 49
+      C51 49 34 51 16 58 Z"/>
+    <!-- lower lip -->
+    <path fill="url(#lip)" d="
+      M16 58
+      C34 55 51 53 64 53
+      C77 53 94 55 112 58
+      C108 85 88 100 64 100
+      C40 100 20 85 16 58 Z"/>
+    <!-- the split, opened just enough to read as a mouth at any size -->
+    <path fill="#0d1322" opacity="0.94" d="
+      M18 58 C36 52 51 50 64 50 C77 50 92 52 110 58 C92 62 77 64 64 64 C51 64 36 62 18 58 Z"/>
+    <!-- gloss -->
+    <ellipse cx="44" cy="79" rx="18" ry="9.5" fill="url(#gloss)"/>
+  </g>
+</svg>

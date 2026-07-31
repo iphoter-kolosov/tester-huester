@@ -113,7 +113,7 @@ export default async function Home({
     <main className="wrap">
       <div className="h">
         <span className="h1">
-          <span className="hdot" /> QA cabinet
+          <img className="hlogo" src="/logo.svg" alt="" width={26} height={26} /> tester-huester
         </span>
         <span className="c">
           {shown.length}

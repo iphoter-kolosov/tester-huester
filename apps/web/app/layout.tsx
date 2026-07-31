@@ -2,6 +2,7 @@ import './globals.css'
 import type { ReactNode } from 'react'
 
 export const metadata = {
+  icons: { icon: '/logo.svg' },
   title: 'tester-huester',
   description: 'Capture QA notes on any site — dashboard, API, MCP.',
 }
