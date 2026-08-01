@@ -9,7 +9,8 @@
   "exports": {
     ".": "./src/index.ts",
     "./repro": "./src/capture/bundle.ts",
-    "./replay-health": "./src/capture/replay-health.ts"
+    "./replay-health": "./src/capture/replay-health.ts",
+    "./annotator": "./src/annotator.ts"
   },
   "scripts": {
     "test": "tsx src/annotator.test.ts && tsx src/capture/capture.test.ts"

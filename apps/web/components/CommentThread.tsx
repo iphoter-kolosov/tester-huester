@@ -1,8 +1,54 @@
 'use client'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 
 export type CommentView = { id: string; author: string; authorKind: string; body: string; createdAt: number }
+
+// Very small markdown: bold **x**, code `x`, image ![alt](url). Nothing else — a full parser would over-invite
+// the tester to write HTML in a bug report. Split into segments so React renders <img>/<code>/<strong> safely,
+// no innerHTML anywhere.
+type Seg = { t: 'text' | 'img' | 'code' | 'bold' | 'br'; v: string; alt?: string }
+function renderBody(body: string): Seg[] {
+  const out: Seg[] = []
+  const lines = body.split('\n')
+  const IMG = /!\[([^\]]*)\]\(([^)\s]+)\)/g
+  const CODE = /`([^`]+)`/g
+  const BOLD = /\*\*([^*]+)\*\*/g
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li]!
+    let last = 0
+    for (const m of line.matchAll(IMG)) {
+      if (m.index! > last) inline(line.slice(last, m.index), out)
+      out.push({ t: 'img', v: m[2]!, alt: m[1] || 'image' })
+      last = m.index! + m[0].length
+    }
+    if (last < line.length) inline(line.slice(last), out)
+    if (li < lines.length - 1) out.push({ t: 'br', v: '' })
+  }
+  return out
+
+  function inline(s: string, o: Seg[]) {
+    // Run bold and code sequentially over the same run — each replaces its matches with segment markers.
+    const parts: Seg[] = [{ t: 'text', v: s }]
+    const step = (re: RegExp, kind: 'bold' | 'code') => {
+      const next: Seg[] = []
+      for (const p of parts) {
+        if (p.t !== 'text') { next.push(p); continue }
+        let last = 0
+        for (const m of p.v.matchAll(re)) {
+          if (m.index! > last) next.push({ t: 'text', v: p.v.slice(last, m.index) })
+          next.push({ t: kind, v: m[1]! })
+          last = m.index! + m[0].length
+        }
+        if (last < p.v.length) next.push({ t: 'text', v: p.v.slice(last) })
+      }
+      parts.splice(0, parts.length, ...next)
+    }
+    step(CODE, 'code')
+    step(BOLD, 'bold')
+    for (const p of parts) o.push(p)
+  }
+}
 
 function ago(ms: number): string {
   const mins = Math.floor((Date.now() - ms) / 60000)
@@ -20,6 +66,31 @@ export default function CommentThread({ reportId, comments }: { reportId: string
   const router = useRouter()
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
+  const ta = useRef<HTMLTextAreaElement>(null)
+
+  // Listen for the ShotEditor: when it finishes, drop the markdown image reference at the caret so the reply
+  // reads as "look at this: <annotated shot>". Scroll it into view so the tester sees the insertion happen.
+  useEffect(() => {
+    const onInsert = (e: Event) => {
+      const md = (e as CustomEvent<string>).detail || ''
+      const el = ta.current
+      if (!el) { setText((t) => (t ? t + '\n\n' + md : md)); return }
+      const start = el.selectionStart ?? el.value.length
+      const end = el.selectionEnd ?? start
+      const before = el.value.slice(0, start)
+      const after = el.value.slice(end)
+      const sep = before && !before.endsWith('\n') ? '\n\n' : ''
+      const next = before + sep + md + '\n' + after
+      setText(next)
+      requestAnimationFrame(() => {
+        el.focus()
+        el.setSelectionRange(start + sep.length + md.length + 1, start + sep.length + md.length + 1)
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      })
+    }
+    window.addEventListener('th:insert-comment', onInsert)
+    return () => window.removeEventListener('th:insert-comment', onInsert)
+  }, [])
 
   const post = async () => {
     const body = text.trim()
@@ -67,15 +138,24 @@ export default function CommentThread({ reportId, comments }: { reportId: string
             <span className="cmtwhen">{ago(c.createdAt)}</span>
             <button className="cmtdel" onClick={() => remove(c.id)} disabled={busy} title="Удалить">✕</button>
           </div>
-          <div className="cmtbody">{c.body}</div>
+          <div className="cmtbody">
+            {renderBody(c.body).map((s, i) => {
+              if (s.t === 'img') return <img key={i} src={s.v} alt={s.alt} />
+              if (s.t === 'code') return <code key={i}>{s.v}</code>
+              if (s.t === 'bold') return <strong key={i}>{s.v}</strong>
+              if (s.t === 'br') return <br key={i} />
+              return <span key={i}>{s.v}</span>
+            })}
+          </div>
         </div>
       ))}
 
       <div className="cmtnew">
         <textarea
+          ref={ta}
           className="cmtta"
           value={text}
-          placeholder="Ответить агенту…"
+          placeholder="Ответить агенту… (можно вставлять размеченные скриншоты через кнопку «✏ Разметить» над снимком)"
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); post() } }}
         />

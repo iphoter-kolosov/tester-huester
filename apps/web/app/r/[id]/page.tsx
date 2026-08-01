@@ -6,6 +6,7 @@ import RowControls from '@/components/RowControls'
 import EditableNote from '@/components/EditableNote'
 import CommentThread from '@/components/CommentThread'
 import CopyId from '@/components/CopyId'
+import ShotWithEditor from '@/components/ShotWithEditor'
 import ReproContext from '@/components/ReproContext'
 import ReplayPlayer from '@/components/ReplayPlayer'
 import VideoPlayer from '@/components/VideoPlayer'
@@ -34,7 +35,7 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
         <RowControls id={r.id} type={r.type} severity={r.severity} status={r.status} projectId={r.projectId} projects={projOpts} archived={r.archived} />
       </div>
 
-      {r.screenshotUrl ? <img className="dshot" src={r.screenshotUrl} alt="" /> : null}
+      {r.screenshotUrl ? <ShotWithEditor src={r.screenshotUrl} reportId={r.id} /> : null}
 
       <EditableNote id={r.id} value={r.note} />
 
