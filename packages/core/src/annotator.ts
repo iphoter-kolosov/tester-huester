@@ -98,6 +98,7 @@ export class ImageAnnotator {
   private cropRect: { x0: number; y0: number; x1: number; y1: number } | null = null
   private drawing = false
   private current: Prim | null = null // in-progress primitive, committed on pointerUp
+  private erasePath: Point[] = [] // brush trail while dragging the eraser — drawn as a soft ring for feedback
 
   constructor(canvas: HTMLCanvasElement, opts: AnnotatorOptions = {}) {
     this.canvas = canvas
@@ -148,7 +149,7 @@ export class ImageAnnotator {
     const p = this.toCanvasCoords(clientX, clientY)
     if (this.tool === 'crop') { this.drawing = true; this.cropRect = { x0: p.x, y0: p.y, x1: p.x, y1: p.y }; this.redraw(); return }
     if (this.tool === 'text') { this.onTextRequest?.(clientX, clientY); return }
-    if (this.tool === 'eraser') { this.eraseAt(p); return }
+    if (this.tool === 'eraser') { this.drawing = true; this.erasePath = [p]; this.eraseSweep(p, p); return }
     this.drawing = true
     if (this.tool === 'arrow') this.current = { kind: 'arrow', color: this.color, width: this.width, a: p, b: { ...p } }
     else if (this.tool === 'rect') this.current = { kind: 'rect', color: this.color, width: this.width, a: p, b: { ...p } }
@@ -160,6 +161,15 @@ export class ImageAnnotator {
     if (!this.drawing) return
     const p = this.toCanvasCoords(clientX, clientY)
     if (this.tool === 'crop') { if (this.cropRect) { this.cropRect.x1 = p.x; this.cropRect.y1 = p.y; this.redraw() } return }
+    if (this.tool === 'eraser') {
+      // Point-and-drag eraser: sweeps a brush-sized band; every primitive whose distance to the swept segment
+      // falls under the brush radius is removed. The path is remembered so the tester sees where they went.
+      const last = this.erasePath.at(-1) ?? p
+      this.eraseSweep(last, p)
+      this.erasePath.push(p)
+      this.redraw()
+      return
+    }
     const cur = this.current
     if (!cur) return
     if (cur.kind === 'freehand') cur.pts.push(p)
@@ -171,6 +181,7 @@ export class ImageAnnotator {
     if (!this.drawing) return
     this.drawing = false
     if (this.tool === 'crop') { this.finishCrop(); return }
+    if (this.tool === 'eraser') { this.erasePath = []; this.redraw(); return }
     const cur = this.current
     this.current = null
     if (cur && this.isMeaningful(cur)) { this.commit({ op: 'add', prim: cur }) } else { this.redraw() }
@@ -244,19 +255,50 @@ export class ImageAnnotator {
     this.redraw(); this.onChange()
   }
 
-  private eraseAt(p: Point): void {
-    const tol = Math.max(12, this.pxWidth('thick') * 1.5)
-    let bestI = -1, bestD = Infinity
-    for (let i = 0; i < this.prims.length; i++) {
-      const d = this.distToPrim(p, this.prims[i]!)
-      if (d < bestD) { bestD = d; bestI = i }
+  // Sweep-erase: remove every primitive whose distance to the swept segment falls under the brush radius.
+  // The brush size follows the width preset — thin/med/thick — so the eraser inherits the same "how big is
+  // my mark" control as the drawing tools; the tester adjusts it once and it applies to both.
+  private eraseSweep(a: Point, b: Point): void {
+    const r = this.brushRadius()
+    let removedAny = false
+    for (let i = this.prims.length - 1; i >= 0; i--) {
+      if (this.distFromPrimToSeg(this.prims[i]!, a, b) < r) {
+        const prim = this.prims.splice(i, 1)[0]!
+        this.undoStack.push({ op: 'erase', prim, index: i })
+        removedAny = true
+      }
     }
-    if (bestI < 0 || bestD > tol) return
-    const prim = this.prims[bestI]!
-    this.prims.splice(bestI, 1)
-    this.undoStack.push({ op: 'erase', prim, index: bestI })
-    this.redoStack = []
-    this.redraw(); this.onChange()
+    if (removedAny) { this.redoStack = []; this.onChange() }
+  }
+
+  private brushRadius(): number {
+    // A useful eraser is a bit larger than the ink it removes so you don't have to trace exactly.
+    return this.pxWidth(this.width) * 3.2 + 6
+  }
+
+  private distFromPrimToSeg(prim: Prim, a: Point, b: Point): number {
+    // Closest distance between the primitive's line/vertices and the eraser sweep — good enough for a hit
+    // test at UI speeds without pixel readback.
+    switch (prim.kind) {
+      case 'arrow':
+      case 'rect': {
+        const p = prim as Arrow | RectPrim
+        // Sample corners + midpoints of the primitive; segment-to-segment is overkill for a UI eraser.
+        const pts: Point[] = [p.a, p.b, { x: (p.a.x + p.b.x) / 2, y: (p.a.y + p.b.y) / 2 }]
+        let m = Infinity
+        for (const q of pts) m = Math.min(m, distToSeg(q, a, b))
+        return m
+      }
+      case 'freehand': {
+        let m = Infinity
+        for (const q of prim.pts) m = Math.min(m, distToSeg(q, a, b))
+        return m
+      }
+      case 'text': {
+        const q = prim.p
+        return distToSeg(q, a, b) - (prim.size || 12) * 0.5
+      }
+    }
   }
 
   private distToPrim(p: Point, prim: Prim): number {
@@ -310,10 +352,29 @@ export class ImageAnnotator {
   private drawPrim(ctx: CanvasRenderingContext2D, prim: Prim): void {
     switch (prim.kind) {
       case 'freehand': {
-        ctx.strokeStyle = prim.color; ctx.lineWidth = this.pxWidth(prim.width)
-        ctx.lineJoin = 'round'; ctx.lineCap = 'round'
+        // Draw as a Catmull-Rom → quadratic Bézier chain: the raw pointer samples are jittery, and connecting
+        // them with straight lines makes deliberate strokes look wobbly. Bézier segments interpolate through
+        // each sample smoothly, so the stroke reads as one calm line without changing what the tester drew.
+        ctx.strokeStyle = prim.color
+        ctx.lineWidth = this.pxWidth(prim.width)
+        ctx.lineJoin = 'round'
+        ctx.lineCap = 'round'
+        const pts = prim.pts
         ctx.beginPath()
-        prim.pts.forEach((p, i) => (i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y)))
+        if (pts.length < 2) {
+          // A single sample: draw a dot so a click still leaves ink.
+          const p = pts[0]!
+          ctx.arc(p.x, p.y, ctx.lineWidth / 2, 0, Math.PI * 2)
+          ctx.fill()
+          break
+        }
+        ctx.moveTo(pts[0]!.x, pts[0]!.y)
+        for (let i = 1; i < pts.length - 1; i++) {
+          const p = pts[i]!, n = pts[i + 1]!
+          ctx.quadraticCurveTo(p.x, p.y, (p.x + n.x) / 2, (p.y + n.y) / 2)
+        }
+        const last = pts[pts.length - 1]!
+        ctx.lineTo(last.x, last.y)
         ctx.stroke()
         break
       }
@@ -382,6 +443,20 @@ export class ImageAnnotator {
     if (this.img) ctx.drawImage(this.img, 0, 0, c.width, c.height)
     for (const prim of this.prims) this.drawPrim(ctx, prim)
     if (this.current) this.drawPrim(ctx, this.current)
+    // Eraser brush trail — visible feedback while the tester wipes something out.
+    if (this.tool === 'eraser' && this.erasePath.length) {
+      const r = this.brushRadius()
+      ctx.save()
+      ctx.strokeStyle = 'rgba(255,255,255,.9)'
+      ctx.lineWidth = 1.5
+      ctx.fillStyle = 'rgba(255,255,255,.14)'
+      ctx.beginPath()
+      const p = this.erasePath[this.erasePath.length - 1]!
+      ctx.arc(p.x, p.y, r, 0, Math.PI * 2)
+      ctx.fill()
+      ctx.stroke()
+      ctx.restore()
+    }
     const rc = this.cropRect
     if (this.tool === 'crop' && rc) {
       const x = Math.min(rc.x0, rc.x1), y = Math.min(rc.y0, rc.y1), w = Math.abs(rc.x1 - rc.x0), h = Math.abs(rc.y1 - rc.y0)

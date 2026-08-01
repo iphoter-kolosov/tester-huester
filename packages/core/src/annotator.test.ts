@@ -4,7 +4,7 @@ import { ImageAnnotator } from './annotator'
 // Off-DOM fakes: enough of a canvas/context for the annotator's state logic to run and be asserted.
 function makeCtx(): any {
   const ctx: any = { strokeStyle: '', lineWidth: 0, lineJoin: '', lineCap: '', fillStyle: '', font: '', textBaseline: '' }
-  for (const m of ['clearRect', 'drawImage', 'beginPath', 'moveTo', 'lineTo', 'stroke', 'save', 'restore', 'fillRect', 'strokeRect', 'setLineDash', 'closePath', 'fill', 'fillText', 'strokeText']) {
+  for (const m of ['clearRect', 'drawImage', 'beginPath', 'moveTo', 'lineTo', 'stroke', 'save', 'restore', 'fillRect', 'strokeRect', 'setLineDash', 'closePath', 'fill', 'fillText', 'strokeText', 'arc', 'quadraticCurveTo', 'ellipse']) {
     ctx[m] = () => {}
   }
   return ctx
@@ -68,11 +68,9 @@ assert.equal(undosBefore, 4, 'exactly the 4 meaningful primitives were on the st
 // redo them all back
 while (a.canRedo()) a.redo()
 
-// 7. eraser removes the nearest primitive by hit-test, and it is undoable
+// 7. eraser is a brush that sweeps across primitives on drag; drop it on top of the rect edge and it removes it.
 a.setTool('eraser')
-// click right on the rect edge drawn above (top edge around y=20, x in [20,90])
-a.pointerDown(20, 20)
-// erasing pushed an 'erase' command → still undoable
+a.pointerDown(20, 20); a.pointerUp() // point-and-release still erases what is under the brush
 assert.ok(a.canUndo(), 'erase is undoable')
 a.undo() // restore the erased primitive
 assert.ok(a.canRedo(), 'erase can be redone')

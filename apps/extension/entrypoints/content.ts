@@ -64,6 +64,29 @@ const WIDTHS: { value: Width; label: string }[] = [
   { value: 'thick', label: 'Толстая' },
 ]
 
+// Compact tool glyphs — one SVG each, currentColor so a button's own colour drives them. Icons are the shape
+// the tool leaves behind (a rectangle, a pointed arrow, a pencil, a marching-ants crop, a T, a slanted eraser)
+// so a tester glances at the panel and knows what will happen.
+const SVG = (path: string, stroke = false) =>
+  `<svg viewBox="0 0 24 24" width="18" height="18" fill="${stroke ? 'none' : 'currentColor'}" stroke="currentColor" stroke-width="${stroke ? 1.9 : 0}" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`
+
+const ICON_RECT = SVG('<rect x="4" y="6" width="16" height="12" rx="1.5" ry="1.5" fill="none" stroke="currentColor" stroke-width="2"/>')
+const ICON_ARROW = SVG('<path d="M4.5 13.5 L15 13.5 L15 9.5 L20.5 14.5 L15 19.5 L15 15.5 L4.5 15.5 Z"/>')
+const ICON_PENCIL = SVG(
+  '<path d="M14.5 4.5 L19.5 9.5 L9 20 L4 20 L4 15 Z" fill="currentColor"/>' +
+  '<path d="M13 6 L18 11" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="1.4"/>' +
+  '<path d="M4.6 19.4 L8.6 19.4" fill="none" stroke="rgba(255,255,255,.65)" stroke-width="1.2"/>',
+)
+const ICON_CROP = SVG(
+  '<path d="M7 3 L7 17 L21 17" fill="none" stroke="currentColor" stroke-width="2"/>' +
+  '<path d="M3 7 L17 7 L17 21" fill="none" stroke="currentColor" stroke-width="2"/>',
+)
+const ICON_TEXT = SVG('<path d="M5 5 L19 5 L19 8 L14 8 L14 20 L10 20 L10 8 L5 8 Z"/>')
+const ICON_ERASER = SVG(
+  '<path d="M15.5 3.5 L20.5 8.5 L11 18 L4 18 L4 14.5 Z" fill="currentColor"/>' +
+  '<path d="M4 20 L20 20" fill="none" stroke="currentColor" stroke-width="2"/>',
+)
+
 const CSS = `
 :host, * { box-sizing: border-box; }
 .scrim { position: fixed; inset: 0; background: rgba(3,7,18,.82); backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; padding: 16px; font: 14px system-ui, sans-serif; }
@@ -100,6 +123,29 @@ const CSS = `
 .canvas.text { cursor: text; }
 .canvas.eraser { cursor: pointer; }
 .tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.grpkey { color: #64748b; font-weight: 700; font-size: 9px; text-transform: none; letter-spacing: 0; margin-left: 6px; }
+.tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+.tools .tb { height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.acts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; margin-top: 4px; }
+.acts .tb { height: 28px; padding: 0; }
+
+/* colour scale — one strip of preset swatches; the ring marks the active one */
+.cscale { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; padding: 4px 5px; border: 1px solid #223049; border-radius: 8px; background: #0f1626; }
+.cstep { width: 100%; aspect-ratio: 1 / 1; border-radius: 5px; border: 1.5px solid rgba(255,255,255,.14); background: var(--sw); cursor: pointer; padding: 0; transition: transform .1s; }
+.cstep:hover { transform: scale(1.15); border-color: rgba(255,255,255,.55); }
+.cstep.on { border-color: #e6edf7; box-shadow: 0 0 0 2px #131a2b, 0 0 0 3px #38bdf8; }
+
+/* width scale — three notches with visible dot sizes, labelled */
+.wscale { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; padding: 4px 5px; border: 1px solid #223049; border-radius: 8px; background: #0f1626; }
+.wstep { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; height: 44px; border: 1.5px solid #223049; background: #131a2b; border-radius: 7px; color: #8ea0bd; font-size: 10.5px; font-weight: 700; cursor: pointer; padding: 0; }
+.wstep:hover { border-color: rgba(56,189,248,.55); color: #e6edf7; }
+.wstep.on { border-color: #0a84ff; background: #0a84ff; color: #fff; }
+.wdot { display: block; border-radius: 999px; background: currentColor; }
+.wdot-thin { width: 4px; height: 4px; }
+.wdot-med { width: 8px; height: 8px; }
+.wdot-thick { width: 13px; height: 13px; }
+.wlbl { line-height: 1; }
+
 .sw { width: 24px; height: 24px; border-radius: 50%; border: 2px solid rgba(255,255,255,.25); cursor: pointer; padding: 0; }
 .sw:hover { transform: scale(1.12); }
 .sw.on { border-color: #e6edf7; box-shadow: 0 0 0 2px #131a2b, 0 0 0 3px #38bdf8; }
@@ -269,30 +315,32 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
           <div class="side">
             <div class="sidescroll">
             <div class="grp">
-              <span class="grpttl">Цвет</span>
-              <div class="cpick">
-                <button class="cpcur" title="Выбрать цвет"><span class="cpdot" style="background:${DEFAULT_COLORS[0]}"></span><span class="cpcar">▾</span></button>
-                <div class="cppop">
-                  ${DEFAULT_COLORS.map((c, i) => `<button class="sw${i === 0 ? ' on' : ''}" data-c="${c}" style="background:${c}" title="${c}"></button>`).join('')}
-                </div>
+              <span class="grpttl">Инструмент</span>
+              <span class="rowx tools">
+                <button class="tb tool on" data-tool="rect" title="Рамка · R">${ICON_RECT}</button>
+                <button class="tb tool" data-tool="arrow" title="Стрелка · A">${ICON_ARROW}</button>
+                <button class="tb tool" data-tool="draw" title="Карандаш · P — сглаженный штрих">${ICON_PENCIL}</button>
+                <button class="tb tool" data-tool="crop" title="Кадрирование · C">${ICON_CROP}</button>
+                <button class="tb tool" data-tool="text" title="Текст · T">${ICON_TEXT}</button>
+                <button class="tb tool" data-tool="eraser" title="Ластик · E — стирает по проведённой линии, размер = толщина">${ICON_ERASER}</button>
+              </span>
+              <span class="rowx acts">
+                <button class="tb" data-act="undo" disabled title="Отменить · Ctrl+Z">↩</button>
+                <button class="tb" data-act="redo" disabled title="Повторить · Ctrl+Y">↪</button>
+                <button class="tb" data-act="clear" disabled title="Очистить всё · Shift+Del">🗑</button>
+              </span>
+            </div>
+            <div class="grp">
+              <span class="grpttl">Цвет <span class="grpkey">(F — след. цвет)</span></span>
+              <div class="cscale" role="listbox" aria-label="Цвет">
+                ${DEFAULT_COLORS.map((c, i) => `<button class="cstep${i === 0 ? ' on' : ''}" data-c="${c}" style="--sw:${c}" title="${c}"></button>`).join('')}
               </div>
             </div>
             <div class="grp">
-              <span class="grpttl">Инструмент</span>
-              <span class="rowx">
-                <button class="tb tool" data-tool="draw" title="Карандаш (P)">✏</button>
-                <button class="tb tool" data-tool="arrow" title="Стрелка (A)">↗</button>
-                <button class="tb tool on" data-tool="rect" title="Прямоугольник (R)">▭</button>
-                <button class="tb tool" data-tool="text" title="Текст (T)">T</button>
-                <button class="tb tool" data-tool="eraser" title="Ластик (E)">⌫</button>
-                <button class="tb tool" data-tool="crop" title="Кадрировать (C)">✂</button>
-              </span>
-              <span class="rowx">
-                ${WIDTHS.map((w) => `<button class="tb width${w.value === 'med' ? ' on' : ''}" data-w="${w.value}" title="${w.label} (${w.value === 'thin' ? '1' : w.value === 'med' ? '2' : '3'})">${w.value === 'thin' ? '│' : w.value === 'med' ? '┃' : '█'}</button>`).join('')}
-                <button class="tb" data-act="undo" disabled title="Отменить (Ctrl+Z)">↩</button>
-                <button class="tb" data-act="redo" disabled title="Повторить (Ctrl+Y)">↪</button>
-                <button class="tb" data-act="clear" disabled title="Очистить (Shift+Del)">🗑</button>
-              </span>
+              <span class="grpttl">Размер <span class="grpkey">(1 / 2 / 3)</span></span>
+              <div class="wscale" role="listbox" aria-label="Толщина">
+                ${WIDTHS.map((w) => `<button class="wstep${w.value === 'med' ? ' on' : ''}" data-w="${w.value}" title="${w.label} · ${w.value === 'thin' ? '1' : w.value === 'med' ? '2' : '3'}"><span class="wdot wdot-${w.value}"></span><span class="wlbl">${w.label}</span></button>`).join('')}
+              </div>
             </div>
             <div class="grp">
               <span class="grpttl">Тип</span>
@@ -421,6 +469,17 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     onClose()
   }
 
+  // Colour + width scales are set from click AND from hotkey; declared as function statements so the hotkey
+  // handler below can reference them safely (JS hoists function declarations, not const arrows).
+  function pickColor(c: string): void {
+    ann.setColor(c)
+    root.querySelectorAll('.cstep').forEach((s) => s.classList.toggle('on', (s as HTMLElement).dataset.c === c))
+  }
+  function pickWidth(w: Width): void {
+    ann.setWidth(w)
+    root.querySelectorAll('.wstep').forEach((el) => el.classList.toggle('on', (el as HTMLElement).dataset.w === w))
+  }
+
   // Standard editor hotkeys across the whole overlay. Keyed off e.code (PHYSICAL key: 'KeyP', 'KeyZ', 'Digit1'),
   // NOT e.key — so they work under any keyboard layout (RU/EN/HU) and on every OS, where e.key would return a
   // layout-dependent character (physical P → 'з' on the Russian layout) and the mapping would miss. Single-key
@@ -447,8 +506,15 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     const w = WIDTH_CODES[code]
     if (w) {
       e.preventDefault()
-      ann.setWidth(w)
-      root.querySelectorAll('.tb.width').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.w === w))
+      pickWidth(w) // sync the width scale ring
+      return
+    }
+    if (code === 'KeyF') {
+      // Cycle through the colour scale — quick recolour without leaving the pointer.
+      e.preventDefault()
+      const cur = DEFAULT_COLORS.indexOf(ann.color)
+      const next = DEFAULT_COLORS[(cur + (e.shiftKey ? -1 : 1) + DEFAULT_COLORS.length) % DEFAULT_COLORS.length]!
+      pickColor(next)
     }
   }
   document.addEventListener('keydown', onKey, true)
@@ -806,28 +872,14 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   })
   tinInput.addEventListener('blur', commitTextInput)
 
-  const cpop = q<HTMLElement>('.cppop')
-  const cdot = q<HTMLElement>('.cpdot')
-  q<HTMLElement>('.cpcur').addEventListener('click', (e) => { e.stopPropagation(); cpop.classList.toggle('on') })
-  root.querySelectorAll('.sw').forEach((el) =>
-    el.addEventListener('click', () => {
-      const c = (el as HTMLElement).dataset.c!
-      ann.setColor(c)
-      cdot.style.background = c
-      root.querySelectorAll('.sw').forEach((s) => s.classList.toggle('on', s === el))
-      cpop.classList.remove('on')
-    }),
+  root.querySelectorAll('.cstep').forEach((el) =>
+    el.addEventListener('click', () => pickColor((el as HTMLElement).dataset.c!)),
   )
-  // Click anywhere else closes the palette (inside the shadow root and on the page below it).
-  root.addEventListener('click', (e) => { if (!(e.target as HTMLElement).closest?.('.cpick')) cpop.classList.remove('on') })
   root.querySelectorAll('.tb.tool').forEach((el) =>
     el.addEventListener('click', () => ann.setTool((el as HTMLElement).dataset.tool as Tool)),
   )
-  root.querySelectorAll('.tb.width').forEach((el) =>
-    el.addEventListener('click', () => {
-      ann.setWidth((el as HTMLElement).dataset.w as Width)
-      root.querySelectorAll('.tb.width').forEach((w) => w.classList.toggle('on', w === el))
-    }),
+  root.querySelectorAll('.wstep').forEach((el) =>
+    el.addEventListener('click', () => pickWidth((el as HTMLElement).dataset.w as Width)),
   )
   root.querySelectorAll('.seg.type button').forEach((el) =>
     el.addEventListener('click', () => {
