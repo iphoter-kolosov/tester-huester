@@ -499,7 +499,7 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   let trim: { from: number; to: number } | null = null // chosen stretch (seconds from clip start), null = whole
   // The recorded tab video (webm as a data URL). This is the primary recording now; the DOM buffer stays only
   // as a small context fallback.
-  let video: { dataUrl: string; seconds: number; bytes: number } | null = null
+  let video: { dataUrl: string; seconds: number; bytes: number; frames: { at: number; dataUrl: string }[] } | null = null
 
   // The exact events Send will attach. Physically the clip starts at the checkpoint at/before `from` (a clip
   // must open on a snapshot); `replayTrim` rides alongside so the dashboard plays exactly the chosen stretch.
@@ -977,7 +977,7 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       document.addEventListener('keydown', onKey, true)
 
       if (res?.ok && res.dataUrl) {
-        video = { dataUrl: res.dataUrl as string, seconds: Number(res.seconds || 0), bytes: Number(res.bytes || 0) }
+        video = { dataUrl: res.dataUrl as string, seconds: Number(res.seconds || 0), bytes: Number(res.bytes || 0), frames: Array.isArray(res.frames) ? res.frames : [] }
         attach = true
         updateClipPanel()
         const dur = fmtDur(video.seconds)
@@ -1107,6 +1107,9 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
           // The stretch chosen in the editor — the dashboard plays exactly this, so the reader sees the moment
           // that matters instead of the whole run-up.
           videoTrim: attach && video && trim ? { from: trim.from, to: trim.to } : undefined,
+          // Stills sampled from the recording. An agent cannot watch a video, so these are what it actually
+          // looks at; timestamps let it line them up with the steps and the console/network trail.
+          videoFrames: attach && video?.frames?.length ? video.frames : undefined,
         },
       })
       if (res?.ok) {

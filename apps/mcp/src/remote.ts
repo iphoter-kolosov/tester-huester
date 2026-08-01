@@ -80,7 +80,7 @@ server.tool(
 
 server.tool(
   'get_repro_steps',
-  'Get an agent-ready reproduction for a report: numbered user steps (from the recorded action trail) plus a triage summary (console errors, failed network requests, environment).',
+  "Get an agent-ready reproduction: the VISUAL EVIDENCE first (whether a screen recording exists, the reporter's chosen watch range, and the extracted frames with timestamps — LOOK AT THESE IMAGES, you cannot play video), then numbered user steps, console errors, failed requests and environment. Always call this before theorising about a ticket that has a recording.",
   { id: z.string() },
   async ({ id }) => ({ content: [{ type: 'text', text: await api(`/api/reports/${encodeURIComponent(id)}/repro`) }] }),
 )

@@ -133,6 +133,22 @@ export async function POST(req: Request) {
     }
   }
 
+  // Stills sampled from the recording. Stored as ordinary images so an agent can LOOK at them — it cannot
+  // watch a webm, and a video nobody on the fixing side can open is a dead end.
+  let videoFrames: { at: number; url: string }[] | null = null
+  if (Array.isArray(body.videoFrames) && body.videoFrames.length) {
+    const out: { at: number; url: string }[] = []
+    for (const f of (body.videoFrames as { at?: unknown; dataUrl?: unknown }[]).slice(0, 12)) {
+      if (typeof f?.dataUrl !== 'string' || !f.dataUrl.startsWith('data:image/')) continue
+      try {
+        out.push({ at: typeof f.at === 'number' ? Math.round(f.at * 10) / 10 : 0, url: await storage.put(f.dataUrl) })
+      } catch (e) {
+        console.warn('ingest: frame store failed:', e)
+      }
+    }
+    if (out.length) videoFrames = out
+  }
+
   // Record what the SERVER actually received, next to what the extension reported sending. When a replay goes
   // missing, these two halves together say whether it was never sent, arrived broken, or failed to store.
   const context = sanitizeContext(body.context)
@@ -143,6 +159,7 @@ export async function POST(req: Request) {
       stored: !!replayUrl,
       video: !!videoUrl,
       videoSeconds,
+      videoFrames: videoFrames?.length ?? 0,
     })
   }
 
@@ -159,6 +176,7 @@ export async function POST(req: Request) {
     videoUrl,
     videoSeconds,
     videoTrim,
+    videoFrames,
     type: asType(body.type),
     severity: asSeverity(body.severity),
   })
