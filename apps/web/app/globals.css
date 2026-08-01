@@ -284,3 +284,14 @@ button.tidbig { border: 0; padding: 0; }
 
 /* comments render inline images written as markdown ![alt](url) */
 .cmtbody img { max-width: 100%; border-radius: 8px; margin: 6px 0; border: 1px solid var(--border); }
+
+/* dashboard editor: system cursor is hidden over the canvas; a live SVG glyph follows the pointer via JS */
+.edcv { cursor: none !important; }
+.edcv.edcv-eraser { cursor: none !important; }
+.edmodal .tcur { position: fixed; z-index: 2147483646; pointer-events: none; display: none; width: 22px; height: 22px; margin: -2px 0 0 -2px; color: #e6edf7; filter: drop-shadow(0 1px 2px rgba(0,0,0,.9)); }
+.edmodal .tcur.on { display: block; }
+.edmodal .tcur svg { display: block; width: 22px; height: 22px; }
+.edmodal .tcur[data-tool="rect"], .edmodal .tcur[data-tool="arrow"], .edmodal .tcur[data-tool="ellipse"], .edmodal .tcur[data-tool="text"] { transform: translate(-11px, -11px); }
+.edmodal .tcur[data-tool="crop"] { transform: translate(0, 0); }
+.edmodal .tcur[data-tool="draw"] { transform: translate(-1px, -20px); }
+.edmodal .tcur[data-tool="eraser"] { display: none !important; }

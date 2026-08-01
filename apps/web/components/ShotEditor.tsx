@@ -19,6 +19,16 @@ type Props = {
   onInsert: (markdownLink: string) => void
 }
 
+// Live tool cursor glyphs — matched to the extension so the muscle memory carries over.
+const TOOL_CURSORS: Record<Exclude<Tool, 'eraser'>, string> = {
+  rect:    '<svg viewBox="0 0 22 22"><path d="M11 4v14 M4 11h14" stroke="#0b1220" stroke-width="4" fill="none" stroke-linecap="round"/><path d="M11 4v14 M4 11h14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><rect x="7" y="7" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
+  arrow:   '<svg viewBox="0 0 22 22"><path d="M11 4v14 M4 11h14" stroke="#0b1220" stroke-width="4" fill="none" stroke-linecap="round"/><path d="M11 4v14 M4 11h14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M15 8 L19 12 L15 16 L15 13 L11 13 L11 11 L15 11 Z" fill="currentColor" stroke="#0b1220" stroke-width="0.8"/></svg>',
+  ellipse: '<svg viewBox="0 0 22 22"><path d="M11 4v14 M4 11h14" stroke="#0b1220" stroke-width="4" fill="none" stroke-linecap="round"/><path d="M11 4v14 M4 11h14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><ellipse cx="11" cy="11" rx="5" ry="3.6" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
+  text:    '<svg viewBox="0 0 22 22"><path d="M8 4h6 M8 18h6 M11 4v14" stroke="#0b1220" stroke-width="4" fill="none" stroke-linecap="round"/><path d="M8 4h6 M8 18h6 M11 4v14" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
+  crop:    '<svg viewBox="0 0 22 22"><path d="M8 2v13h13 M2 8h13v13" stroke="#0b1220" stroke-width="4" fill="none" stroke-linecap="round"/><path d="M8 2v13h13 M2 8h13v13" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
+  draw:    '<svg viewBox="0 0 22 22"><path d="M14 3 L19 8 L8 19 L3 19 L3 14 Z" fill="currentColor" stroke="#0b1220" stroke-width="1"/><path d="M3 19 L6 19" stroke="#38bdf8" stroke-width="1.5"/></svg>',
+}
+
 const TOOLS: { key: Tool; label: string; hot: string; svg: string }[] = [
   { key: 'rect', label: 'Рамка', hot: 'R', svg: '<rect x="4" y="6" width="16" height="12" rx="1.5" fill="none" stroke="currentColor" stroke-width="2"/>' },
   { key: 'arrow', label: 'Стрелка', hot: 'A', svg: '<path d="M4.5 13.5H15V9.5L20.5 14.5 15 19.5V15.5H4.5z" fill="currentColor"/>' },
@@ -33,6 +43,7 @@ export default function ShotEditor({ imageUrl, reportId, onClose, onInsert }: Pr
   const cvRef = useRef<HTMLCanvasElement>(null)
   const stageRef = useRef<HTMLDivElement>(null)
   const annRef = useRef<ImageAnnotator | null>(null)
+  const tcurRef = useRef<HTMLDivElement>(null) // live tool glyph following the pointer
   const [tool, setTool] = useState<Tool>('rect')
   const [color, setColor] = useState(DEFAULT_COLORS[0]!)
   const [width, setWidth] = useState<Width>('med')
@@ -54,11 +65,37 @@ export default function ShotEditor({ imageUrl, reportId, onClose, onInsert }: Pr
       onChange: () => {
         setCanUndo(ann.canUndo())
         setCanRedo(ann.canRedo())
+        // The tool can change from inside the engine (crop finishes → 'rect'), so keep the React mirror in sync
+        // instead of drifting silently.
+        setTool(ann.tool)
+        setColor(ann.color)
       },
       onTextRequest: (x, y) => setTextAt({ x, y }),
     })
     annRef.current = ann
     ann.setImage(imageUrl).catch(() => setErr('Не удалось загрузить изображение'))
+
+    // Pointer wiring — the engine is UI-agnostic and does not attach its own listeners, so this file must.
+    // Text and eraser are single-tap / brush and setting pointer capture would steal focus from the text input
+    // (and prevent the eraser sweep from leaving the canvas cleanly), so those two skip capture.
+    const down = (e: PointerEvent) => {
+      if (ann.tool !== 'text' && ann.tool !== 'eraser') cv.setPointerCapture(e.pointerId)
+      ann.pointerDown(e.clientX, e.clientY)
+    }
+    const move = (e: PointerEvent) => {
+      ann.pointerMove(e.clientX, e.clientY)
+      // Live tool glyph following the pointer — same feel as the extension overlay.
+      const t = tcurRef.current
+      if (t) { t.style.left = e.clientX + 'px'; t.style.top = e.clientY + 'px' }
+    }
+    const up = () => ann.pointerUp()
+    const enter = () => { if (ann.tool !== 'eraser') tcurRef.current?.classList.add('on') }
+    const leave = () => { tcurRef.current?.classList.remove('on'); ann.pointerUp() }
+    cv.addEventListener('pointerdown', down)
+    cv.addEventListener('pointermove', move)
+    cv.addEventListener('pointerup', up)
+    cv.addEventListener('pointerenter', enter)
+    cv.addEventListener('pointerleave', leave)
 
     // Fit the canvas element into the stage (the canvas has real pixel dims after setImage; CSS scales it).
     const fit = () => {
@@ -71,11 +108,17 @@ export default function ShotEditor({ imageUrl, reportId, onClose, onInsert }: Pr
     }
     const ro = new ResizeObserver(fit)
     if (stageRef.current) ro.observe(stageRef.current)
-    // First image decode is async; refit shortly after so the newly-sized canvas fits its box.
-    const t = setTimeout(fit, 60)
+    // The image decodes asynchronously — refit a few times so the newly-sized canvas fits its box regardless.
+    const t1 = setTimeout(fit, 60)
+    const t2 = setTimeout(fit, 250)
     return () => {
       ro.disconnect()
-      clearTimeout(t)
+      clearTimeout(t1); clearTimeout(t2)
+      cv.removeEventListener('pointerdown', down)
+      cv.removeEventListener('pointermove', move)
+      cv.removeEventListener('pointerup', up)
+      cv.removeEventListener('pointerenter', enter)
+      cv.removeEventListener('pointerleave', leave)
     }
   }, [imageUrl])
 
@@ -200,7 +243,7 @@ export default function ShotEditor({ imageUrl, reportId, onClose, onInsert }: Pr
           </div>
 
           <div className="edstage" ref={stageRef}>
-            <canvas ref={cvRef} className="edcv" />
+            <canvas ref={cvRef} className={'edcv edcv-' + tool} />
             {textAt && (
               <div className="tin" style={{ left: textAt.x, top: textAt.y }}>
                 <input
@@ -215,6 +258,15 @@ export default function ShotEditor({ imageUrl, reportId, onClose, onInsert }: Pr
                 />
               </div>
             )}
+            {/* Live tool glyph — pinned to the fragment's document with position:fixed via CSS. */}
+            <div
+              ref={tcurRef}
+              className="tcur"
+              data-tool={tool}
+              dangerouslySetInnerHTML={{
+                __html: TOOL_CURSORS[tool as keyof typeof TOOL_CURSORS] ?? '',
+              }}
+            />
           </div>
         </div>
 
