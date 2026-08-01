@@ -103,26 +103,35 @@ const CSS = `
 /* The rail's action buttons are pinned: only the controls above them scroll, so Send/Cancel/record are
    reachable at any window height instead of hiding below an overflow. */
 .side { flex: 0 0 232px; width: 232px; display: flex; flex-direction: column; gap: 7px; min-height: 0; }
-/* Everything must fit — the rail is the tester's control surface, hiding it behind an overflow means a hidden
-   control they'll never find. Layout is compact enough that no scrollbar is needed. */
-.sidescroll { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 7px; overflow: hidden; }
+/* Middle section scrolls only when the viewport is genuinely too short (short laptops); otherwise everything
+   is visible without a scrollbar. Never clip: cutting off controls the tester will never find is worse than
+   a thin scrollbar. The footer (record/send/cancel) stays pinned below via .sidefoot. */
+.sidescroll { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 7px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; padding-right: 3px; }
+.sidescroll::-webkit-scrollbar { width: 6px; }
+.sidescroll::-webkit-scrollbar-thumb { background: #2b3a55; border-radius: 3px; }
 .main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .cvwrap { flex: 1 1 auto; min-height: 90px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .canvas { display: block; max-width: 100%; max-height: 100%; border-radius: 10px; border: 1px solid #223049; background: #0f1626; touch-action: none; cursor: crosshair; }
-/* Photoshop-style cursors per tool: each is a small SVG data URL so it works without any external asset.
-   Rect/arrow/ellipse — precision crosshair; text — I-beam; crop — targeted crosshair with cornered handles;
-   pencil — a tilted pen with a small tip; eraser — a slanted eraser icon. */
-.canvas.rect { cursor: crosshair; }
-.canvas.arrow { cursor: crosshair; }
-.canvas.ellipse { cursor: crosshair; }
-.canvas.text { cursor: text; }
-.canvas.crop { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%230f172a' stroke-width='3'><path d='M8 3v13h13'/><path d='M3 8h13v13'/></svg><svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='1.4'><path d='M8 3v13h13'/><path d='M3 8h13v13'/></svg>") 12 12, crosshair; }
-.canvas.draw { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='22' height='22' viewBox='0 0 22 22'><path d='M14 3 L19 8 L8 19 L3 19 L3 14 Z' fill='%23e6edf7' stroke='%230f172a' stroke-width='1.2' stroke-linejoin='round'/><path d='M3 19 L6 19' stroke='%2338bdf8' stroke-width='1.5'/></svg>") 2 20, crosshair; }
-.canvas.eraser { cursor: none; } /* the brush ring on-canvas IS the cursor — a real cursor would fight it */
+/* System cursor is hidden while the pointer is over the canvas; a live SVG glyph follows the pointer via JS
+   (see .tcur). That matches how graphics apps show tools — a tiny badge that IS the tool, not a generic arrow. */
+.canvas { cursor: none; }
+.tcur { position: fixed; z-index: 2147483646; pointer-events: none; display: none; width: 22px; height: 22px; margin: -2px 0 0 -2px; color: #e6edf7; filter: drop-shadow(0 1px 2px rgba(0,0,0,.9)); }
+.tcur.on { display: block; }
+.tcur svg { display: block; width: 22px; height: 22px; }
+.tcur svg .fill { fill: currentColor; stroke: #0b1220; stroke-width: 1.2; stroke-linejoin: round; }
+.tcur svg .stroke { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; paint-order: stroke; }
+.tcur svg .shadow { fill: none; stroke: #0b1220; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+/* Where the icon's "hot point" sits relative to its top-left, per tool — matches Photoshop conventions:
+   crosshair centred for shapes, tip for pencil/eraser, top-left crop, I-beam centred. */
+.tcur[data-tool="rect"], .tcur[data-tool="arrow"], .tcur[data-tool="ellipse"] { transform: translate(-11px, -11px); }
+.tcur[data-tool="text"] { transform: translate(-11px, -11px); }
+.tcur[data-tool="crop"] { transform: translate(0, 0); }
+.tcur[data-tool="draw"] { transform: translate(-1px, -20px); }
+.tcur[data-tool="eraser"] { display: none !important; } /* the brush ring on-canvas IS the eraser cursor */
 
 /* left rail groups */
-.grp { display: flex; flex-direction: column; gap: 6px; }
-.grpttl { font-size: 9.5px; font-weight: 800; color: #8ea0bd; text-transform: uppercase; letter-spacing: .05em; }
+.grp { display: flex; flex-direction: column; gap: 5px; }
+.grpttl { font-size: 9.5px; font-weight: 800; color: #8ea0bd; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 1px; }
 .rowx { display: flex; gap: 5px; flex-wrap: wrap; }
 .side .tb { height: 30px; padding: 0 9px; flex: 0 0 auto; }
 .side .seg { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
@@ -149,10 +158,10 @@ const CSS = `
 .lyto b { display: block; font-size: 12px; margin-bottom: 3px; }
 .lyto i { font-style: normal; font-size: 10.5px; color: #8ea0bd; font-weight: 600; line-height: 1.35; }
 .lyto.on { background: rgba(10,132,255,.12); border-color: rgba(10,132,255,.6); }
-.tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
-.tools .tb { height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
-.acts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; margin-top: 4px; }
-.acts .tb { height: 28px; padding: 0; }
+.tools { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+.tools .tb { height: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+.acts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; margin-top: 3px; }
+.acts .tb { height: 26px; padding: 0; }
 
 /* colour slider — the palette painted as a horizontal bar, a small ring rides above the active swatch;
    click anywhere to jump, drag the ring to scrub. */
@@ -456,6 +465,7 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
         </div>
       </div>
       <div class="tmark"></div>
+      <div class="tcur" data-tool="rect"></div>
       <div class="tin">
         <input type="text" placeholder="Текст…" />
         <div class="tinrow">
@@ -913,6 +923,7 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     for (const t of ['rect', 'arrow', 'ellipse', 'text', 'crop', 'draw', 'eraser'] as const) {
       canvas.classList.toggle(t, ann.tool === t)
     }
+    paintCursor()
   }
 
   const openTextInput = (clientX: number, clientY: number) => {
@@ -938,14 +949,38 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   const ann = new ImageAnnotator(canvas, { onChange: refresh, onTextRequest: openTextInput })
   ann.setImage(shot).then(refresh).catch(() => setMsg('Could not load screenshot', 'err'))
 
+  // Tool cursor — a live SVG glyph following the pointer, so the pixel under the cursor tells you which tool
+  // is armed. System cursor is hidden (see .canvas { cursor: none }) and this element carries the identity.
+  const tcur = q<HTMLElement>('.tcur')
+  const TOOL_CURSORS: Record<Exclude<Tool, 'eraser'>, string> = {
+    rect:    '<svg viewBox="0 0 22 22"><path class="shadow" d="M11 4v14 M4 11h14"/><path class="stroke" d="M11 4v14 M4 11h14"/><rect x="7" y="7" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
+    arrow:   '<svg viewBox="0 0 22 22"><path class="shadow" d="M11 4v14 M4 11h14"/><path class="stroke" d="M11 4v14 M4 11h14"/><path class="fill" d="M15 8 L19 12 L15 16 L15 13 L11 13 L11 11 L15 11 Z"/></svg>',
+    ellipse: '<svg viewBox="0 0 22 22"><path class="shadow" d="M11 4v14 M4 11h14"/><path class="stroke" d="M11 4v14 M4 11h14"/><ellipse cx="11" cy="11" rx="5" ry="3.6" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
+    text:    '<svg viewBox="0 0 22 22"><path class="shadow" d="M8 4h6 M8 18h6 M11 4v14"/><path class="stroke" d="M8 4h6 M8 18h6 M11 4v14"/></svg>',
+    crop:    '<svg viewBox="0 0 22 22"><path class="shadow" d="M8 2v13h13 M2 8h13v13"/><path class="stroke" d="M8 2v13h13 M2 8h13v13"/></svg>',
+    draw:    '<svg viewBox="0 0 22 22"><path class="fill" d="M14 3 L19 8 L8 19 L3 19 L3 14 Z"/><path d="M3 19 L6 19" stroke="#38bdf8" stroke-width="1.5"/></svg>',
+  }
+  function paintCursor() {
+    const t = ann.tool
+    tcur.dataset.tool = t
+    if (t === 'eraser') { tcur.classList.remove('on'); return }
+    tcur.innerHTML = TOOL_CURSORS[t as Exclude<Tool, 'eraser'>]
+  }
+  paintCursor()
+
+  canvas.addEventListener('pointerenter', () => { if (ann.tool !== 'eraser') tcur.classList.add('on') })
+  canvas.addEventListener('pointerleave', () => { tcur.classList.remove('on'); ann.pointerUp() })
   canvas.addEventListener('pointerdown', (e) => {
     // Text & eraser are single-click actions — capturing the pointer here would steal focus from the text input.
     if (ann.tool !== 'text' && ann.tool !== 'eraser') canvas.setPointerCapture(e.pointerId)
     ann.pointerDown(e.clientX, e.clientY)
   })
-  canvas.addEventListener('pointermove', (e) => ann.pointerMove(e.clientX, e.clientY))
+  canvas.addEventListener('pointermove', (e) => {
+    tcur.style.left = e.clientX + 'px'
+    tcur.style.top = e.clientY + 'px'
+    ann.pointerMove(e.clientX, e.clientY)
+  })
   canvas.addEventListener('pointerup', () => ann.pointerUp())
-  canvas.addEventListener('pointerleave', () => ann.pointerUp())
 
   tinInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') { e.preventDefault(); commitTextInput() }
