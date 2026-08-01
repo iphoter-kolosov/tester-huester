@@ -13,13 +13,14 @@ export type Width = 'thin' | 'med' | 'thick'
 export type Freehand = { kind: 'freehand'; color: string; width: Width; pts: Point[] }
 export type Arrow = { kind: 'arrow'; color: string; width: Width; a: Point; b: Point }
 export type RectPrim = { kind: 'rect'; color: string; width: Width; a: Point; b: Point }
+export type EllipsePrim = { kind: 'ellipse'; color: string; width: Width; a: Point; b: Point }
 export type TextPrim = { kind: 'text'; color: string; p: Point; str: string; size: number }
-export type Prim = Freehand | Arrow | RectPrim | TextPrim
+export type Prim = Freehand | Arrow | RectPrim | EllipsePrim | TextPrim
 
 // Back-compat alias: the old model was a single freehand stroke. Old imports keep working.
 export type Stroke = Freehand
 
-export type Tool = 'draw' | 'arrow' | 'rect' | 'text' | 'eraser' | 'crop'
+export type Tool = 'draw' | 'arrow' | 'rect' | 'ellipse' | 'text' | 'eraser' | 'crop'
 
 // Undo/redo works over a command log so erasing (which removes a primitive from the middle of the stack) is
 // reversible in the same stack as adding.
@@ -64,6 +65,7 @@ function deepPrim(p: Prim): Prim {
     case 'freehand': return { ...p, pts: p.pts.map((q) => ({ ...q })) }
     case 'arrow': return { ...p, a: { ...p.a }, b: { ...p.b } }
     case 'rect': return { ...p, a: { ...p.a }, b: { ...p.b } }
+    case 'ellipse': return { ...p, a: { ...p.a }, b: { ...p.b } }
     case 'text': return { ...p, p: { ...p.p } }
   }
 }
@@ -153,6 +155,7 @@ export class ImageAnnotator {
     this.drawing = true
     if (this.tool === 'arrow') this.current = { kind: 'arrow', color: this.color, width: this.width, a: p, b: { ...p } }
     else if (this.tool === 'rect') this.current = { kind: 'rect', color: this.color, width: this.width, a: p, b: { ...p } }
+    else if (this.tool === 'ellipse') this.current = { kind: 'ellipse', color: this.color, width: this.width, a: p, b: { ...p } }
     else this.current = { kind: 'freehand', color: this.color, width: this.width, pts: [p] }
     this.redraw()
   }
@@ -173,7 +176,7 @@ export class ImageAnnotator {
     const cur = this.current
     if (!cur) return
     if (cur.kind === 'freehand') cur.pts.push(p)
-    else if (cur.kind === 'arrow' || cur.kind === 'rect') cur.b = p
+    else if (cur.kind === 'arrow' || cur.kind === 'rect' || cur.kind === 'ellipse') cur.b = p
     this.redraw()
   }
 
@@ -281,8 +284,9 @@ export class ImageAnnotator {
     // test at UI speeds without pixel readback.
     switch (prim.kind) {
       case 'arrow':
-      case 'rect': {
-        const p = prim as Arrow | RectPrim
+      case 'rect':
+      case 'ellipse': {
+        const p = prim as Arrow | RectPrim | EllipsePrim
         // Sample corners + midpoints of the primitive; segment-to-segment is overkill for a UI eraser.
         const pts: Point[] = [p.a, p.b, { x: (p.a.x + p.b.x) / 2, y: (p.a.y + p.b.y) / 2 }]
         let m = Infinity
@@ -317,6 +321,14 @@ export class ImageAnnotator {
         const tl = { x: x0, y: y0 }, tr = { x: x1, y: y0 }, br = { x: x1, y: y1 }, bl = { x: x0, y: y1 }
         return Math.min(distToSeg(p, tl, tr), distToSeg(p, tr, br), distToSeg(p, br, bl), distToSeg(p, bl, tl))
       }
+      case 'ellipse': {
+        const cx = (prim.a.x + prim.b.x) / 2, cy = (prim.a.y + prim.b.y) / 2
+        const rx = Math.max(1, Math.abs(prim.b.x - prim.a.x) / 2), ry = Math.max(1, Math.abs(prim.b.y - prim.a.y) / 2)
+        // Approximate distance-to-ellipse via the normalised deviation of the point from the ellipse boundary.
+        const nx = (p.x - cx) / rx, ny = (p.y - cy) / ry
+        const r = Math.hypot(nx, ny) || 1
+        return Math.abs(r - 1) * Math.min(rx, ry)
+      }
       case 'text': {
         const w = Math.max(prim.size, prim.str.length * prim.size * 0.55), h = prim.size * 1.2
         const dx = Math.max(prim.p.x - p.x, 0, p.x - (prim.p.x + w))
@@ -328,7 +340,7 @@ export class ImageAnnotator {
 
   private isMeaningful(prim: Prim): boolean {
     if (prim.kind === 'freehand') return prim.pts.length > 1
-    if (prim.kind === 'arrow' || prim.kind === 'rect') return Math.hypot(prim.b.x - prim.a.x, prim.b.y - prim.a.y) >= 5
+    if (prim.kind === 'arrow' || prim.kind === 'rect' || prim.kind === 'ellipse') return Math.hypot(prim.b.x - prim.a.x, prim.b.y - prim.a.y) >= 5
     return true
   }
 
@@ -418,6 +430,17 @@ export class ImageAnnotator {
         const w = Math.abs(prim.b.x - prim.a.x), h = Math.abs(prim.b.y - prim.a.y)
         ctx.strokeStyle = prim.color; ctx.lineWidth = this.pxWidth(prim.width); ctx.lineJoin = 'miter'
         ctx.strokeRect(x, y, w, h)
+        break
+      }
+      case 'ellipse': {
+        // Same bounding-rect gesture as the rectangle: the ellipse fits inside the drag box, so a diagonal
+        // stroke gives an oval and a square drag gives a circle — no extra modifier keys.
+        const cx = (prim.a.x + prim.b.x) / 2, cy = (prim.a.y + prim.b.y) / 2
+        const rx = Math.abs(prim.b.x - prim.a.x) / 2, ry = Math.abs(prim.b.y - prim.a.y) / 2
+        ctx.strokeStyle = prim.color; ctx.lineWidth = this.pxWidth(prim.width); ctx.lineJoin = 'round'
+        ctx.beginPath()
+        ctx.ellipse(cx, cy, Math.max(rx, 0.5), Math.max(ry, 0.5), 0, 0, Math.PI * 2)
+        ctx.stroke()
         break
       }
       case 'text': {

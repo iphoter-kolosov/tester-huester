@@ -71,6 +71,7 @@ const SVG = (path: string, stroke = false) =>
   `<svg viewBox="0 0 24 24" width="18" height="18" fill="${stroke ? 'none' : 'currentColor'}" stroke="currentColor" stroke-width="${stroke ? 1.9 : 0}" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`
 
 const ICON_RECT = SVG('<rect x="4" y="6" width="16" height="12" rx="1.5" ry="1.5" fill="none" stroke="currentColor" stroke-width="2"/>')
+const ICON_ELLIPSE = SVG('<ellipse cx="12" cy="12" rx="8.5" ry="6" fill="none" stroke="currentColor" stroke-width="2"/>')
 const ICON_ARROW = SVG('<path d="M4.5 13.5 L15 13.5 L15 9.5 L20.5 14.5 L15 19.5 L15 15.5 L4.5 15.5 Z"/>')
 const ICON_PENCIL = SVG(
   '<path d="M14.5 4.5 L19.5 9.5 L9 20 L4 20 L4 15 Z" fill="currentColor"/>' +
@@ -101,11 +102,23 @@ const CSS = `
 .body { display: flex; gap: 10px; flex: 1 1 auto; min-height: 0; }
 /* The rail's action buttons are pinned: only the controls above them scroll, so Send/Cancel/record are
    reachable at any window height instead of hiding below an overflow. */
-.side { flex: 0 0 232px; width: 232px; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-.sidescroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 9px; padding-right: 2px; }
+.side { flex: 0 0 232px; width: 232px; display: flex; flex-direction: column; gap: 7px; min-height: 0; }
+/* Everything must fit — the rail is the tester's control surface, hiding it behind an overflow means a hidden
+   control they'll never find. Layout is compact enough that no scrollbar is needed. */
+.sidescroll { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 7px; overflow: hidden; }
 .main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
 .cvwrap { flex: 1 1 auto; min-height: 90px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
 .canvas { display: block; max-width: 100%; max-height: 100%; border-radius: 10px; border: 1px solid #223049; background: #0f1626; touch-action: none; cursor: crosshair; }
+/* Photoshop-style cursors per tool: each is a small SVG data URL so it works without any external asset.
+   Rect/arrow/ellipse — precision crosshair; text — I-beam; crop — targeted crosshair with cornered handles;
+   pencil — a tilted pen with a small tip; eraser — a slanted eraser icon. */
+.canvas.rect { cursor: crosshair; }
+.canvas.arrow { cursor: crosshair; }
+.canvas.ellipse { cursor: crosshair; }
+.canvas.text { cursor: text; }
+.canvas.crop { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='%230f172a' stroke-width='3'><path d='M8 3v13h13'/><path d='M3 8h13v13'/></svg><svg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24' fill='none' stroke='white' stroke-width='1.4'><path d='M8 3v13h13'/><path d='M3 8h13v13'/></svg>") 12 12, crosshair; }
+.canvas.draw { cursor: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='22' height='22' viewBox='0 0 22 22'><path d='M14 3 L19 8 L8 19 L3 19 L3 14 Z' fill='%23e6edf7' stroke='%230f172a' stroke-width='1.2' stroke-linejoin='round'/><path d='M3 19 L6 19' stroke='%2338bdf8' stroke-width='1.5'/></svg>") 2 20, crosshair; }
+.canvas.eraser { cursor: none; } /* the brush ring on-canvas IS the cursor — a real cursor would fight it */
 
 /* left rail groups */
 .grp { display: flex; flex-direction: column; gap: 6px; }
@@ -124,27 +137,55 @@ const CSS = `
 .canvas.eraser { cursor: pointer; }
 .tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .grpkey { color: #64748b; font-weight: 700; font-size: 9px; text-transform: none; letter-spacing: 0; margin-left: 6px; }
+.grpttl { display: flex; align-items: center; gap: 6px; }
+.lyt { position: relative; margin-left: auto; }
+.lytbtn { border: 1px solid #223049; background: #0f1626; color: #8ea0bd; font-size: 10px; font-weight: 800; text-transform: none; letter-spacing: 0; padding: 2px 7px; border-radius: 6px; cursor: pointer; }
+.lytbtn:hover { color: #e6edf7; border-color: #38bdf8; }
+.lytname { color: #e6edf7; }
+.lytpop { display: none; position: absolute; z-index: 14; right: 0; top: 22px; min-width: 210px; padding: 6px; background: #131a2b; border: 1px solid #2b3a55; border-radius: 10px; box-shadow: 0 14px 34px rgba(0,0,0,.6); flex-direction: column; gap: 4px; }
+.lytpop.on { display: flex; }
+.lyto { text-align: left; padding: 8px 10px; border: 1px solid transparent; background: transparent; color: #e6edf7; border-radius: 8px; cursor: pointer; font: inherit; }
+.lyto:hover { background: #0f1626; border-color: #223049; }
+.lyto b { display: block; font-size: 12px; margin-bottom: 3px; }
+.lyto i { font-style: normal; font-size: 10.5px; color: #8ea0bd; font-weight: 600; line-height: 1.35; }
+.lyto.on { background: rgba(10,132,255,.12); border-color: rgba(10,132,255,.6); }
 .tools { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
 .tools .tb { height: 34px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
 .acts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; margin-top: 4px; }
 .acts .tb { height: 28px; padding: 0; }
 
-/* colour scale — one strip of preset swatches; the ring marks the active one */
-.cscale { display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; padding: 4px 5px; border: 1px solid #223049; border-radius: 8px; background: #0f1626; }
-.cstep { width: 100%; aspect-ratio: 1 / 1; border-radius: 5px; border: 1.5px solid rgba(255,255,255,.14); background: var(--sw); cursor: pointer; padding: 0; transition: transform .1s; }
-.cstep:hover { transform: scale(1.15); border-color: rgba(255,255,255,.55); }
-.cstep.on { border-color: #e6edf7; box-shadow: 0 0 0 2px #131a2b, 0 0 0 3px #38bdf8; }
+/* colour slider — the palette painted as a horizontal bar, a small ring rides above the active swatch;
+   click anywhere to jump, drag the ring to scrub. */
+.cbar { position: relative; height: 22px; border-radius: 6px; cursor: pointer; user-select: none; overflow: visible;
+  background: linear-gradient(to right,
+    #ff3b30 0%, #ff3b30 8.33%,
+    #ff9500 8.33%, #ff9500 16.66%,
+    #ffcc00 16.66%, #ffcc00 25%,
+    #34c759 25%, #34c759 33.33%,
+    #00c7be 33.33%, #00c7be 41.66%,
+    #0a84ff 41.66%, #0a84ff 50%,
+    #5856d6 50%, #5856d6 58.33%,
+    #af52de 58.33%, #af52de 66.66%,
+    #ff2d55 66.66%, #ff2d55 75%,
+    #ffffff 75%, #ffffff 83.33%,
+    #8e8e93 83.33%, #8e8e93 91.66%,
+    #0c1526 91.66%, #0c1526 100%);
+  border: 1px solid #223049;
+}
+.cknob { position: absolute; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%;
+  background: currentColor; border: 2px solid #fff; box-shadow: 0 0 0 1px #0f1626, 0 2px 6px rgba(0,0,0,.6);
+  pointer-events: none; transition: left .06s linear; }
 
-/* width scale — three notches with visible dot sizes, labelled */
-.wscale { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; padding: 4px 5px; border: 1px solid #223049; border-radius: 8px; background: #0f1626; }
-.wstep { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; height: 44px; border: 1.5px solid #223049; background: #131a2b; border-radius: 7px; color: #8ea0bd; font-size: 10.5px; font-weight: 700; cursor: pointer; padding: 0; }
-.wstep:hover { border-color: rgba(56,189,248,.55); color: #e6edf7; }
-.wstep.on { border-color: #0a84ff; background: #0a84ff; color: #fff; }
-.wdot { display: block; border-radius: 999px; background: currentColor; }
-.wdot-thin { width: 4px; height: 4px; }
-.wdot-med { width: 8px; height: 8px; }
-.wdot-thick { width: 13px; height: 13px; }
-.wlbl { line-height: 1; }
+/* width slider — a tapered wedge, the knob shows the current thickness as a dot */
+.wbar { position: relative; height: 30px; border-radius: 6px; cursor: pointer; user-select: none;
+  background: linear-gradient(to right, #0f1626, #0f1626); border: 1px solid #223049; overflow: visible; padding: 0 12px;
+  display: flex; align-items: center; }
+.wwedge { flex: 1; height: 20px; background: linear-gradient(to right, transparent, transparent);
+  clip-path: polygon(0 45%, 100% 0, 100% 100%, 0 55%); background-color: #e6edf7; opacity: .85; border-radius: 3px; }
+.wknob { position: absolute; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%;
+  background: #0a84ff; border: 2px solid #fff; box-shadow: 0 0 0 1px #0f1626, 0 2px 6px rgba(0,0,0,.6);
+  pointer-events: none; transition: left .06s linear; }
+.wtags { display: flex; justify-content: space-between; padding: 0 2px; font-size: 9.5px; font-weight: 700; color: #8ea0bd; text-transform: none; letter-spacing: 0; margin-top: 2px; }
 
 .sw { width: 24px; height: 24px; border-radius: 50%; border: 2px solid rgba(255,255,255,.25); cursor: pointer; padding: 0; }
 .sw:hover { transform: scale(1.12); }
@@ -315,16 +356,23 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
           <div class="side">
             <div class="sidescroll">
             <div class="grp">
-              <span class="grpttl">Инструмент</span>
+              <span class="grpttl">Инструмент
+                <span class="lyt">
+                  <button class="lytbtn" title="Раскладка клавиш"><span class="lytname">designer</span> ▾</button>
+                  <div class="lytpop">
+                    <button class="lyto" data-lyt="designer"><b>Designer</b><i>буквы-мнемоника<br>R А O P C T E</i></button>
+                    <button class="lyto" data-lyt="gamer"><b>Gamer (CS)</b><i>инструменты как оружие: 1-7<br>Q — undo · R — redo · Z/X/M — толщина</i></button>
+                  </div>
+                </span>
+              </span>
               <span class="rowx tools">
                 <button class="tb tool on" data-tool="rect" title="Рамка · R">${ICON_RECT}</button>
                 <button class="tb tool" data-tool="arrow" title="Стрелка · A">${ICON_ARROW}</button>
+                <button class="tb tool" data-tool="ellipse" title="Овал · O">${ICON_ELLIPSE}</button>
                 <button class="tb tool" data-tool="draw" title="Карандаш · P — сглаженный штрих">${ICON_PENCIL}</button>
                 <button class="tb tool" data-tool="crop" title="Кадрирование · C">${ICON_CROP}</button>
                 <button class="tb tool" data-tool="text" title="Текст · T">${ICON_TEXT}</button>
                 <button class="tb tool" data-tool="eraser" title="Ластик · E — стирает по проведённой линии, размер = толщина">${ICON_ERASER}</button>
-              </span>
-              <span class="rowx acts">
                 <button class="tb" data-act="undo" disabled title="Отменить · Ctrl+Z">↩</button>
                 <button class="tb" data-act="redo" disabled title="Повторить · Ctrl+Y">↪</button>
                 <button class="tb" data-act="clear" disabled title="Очистить всё · Shift+Del">🗑</button>
@@ -332,15 +380,12 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
             </div>
             <div class="grp">
               <span class="grpttl">Цвет <span class="grpkey">(F — след. цвет)</span></span>
-              <div class="cscale" role="listbox" aria-label="Цвет">
-                ${DEFAULT_COLORS.map((c, i) => `<button class="cstep${i === 0 ? ' on' : ''}" data-c="${c}" style="--sw:${c}" title="${c}"></button>`).join('')}
-              </div>
+              <div class="cbar" role="slider" aria-label="Цвет"><span class="cknob" style="color:${DEFAULT_COLORS[0]}"></span></div>
             </div>
             <div class="grp">
               <span class="grpttl">Размер <span class="grpkey">(1 / 2 / 3)</span></span>
-              <div class="wscale" role="listbox" aria-label="Толщина">
-                ${WIDTHS.map((w) => `<button class="wstep${w.value === 'med' ? ' on' : ''}" data-w="${w.value}" title="${w.label} · ${w.value === 'thin' ? '1' : w.value === 'med' ? '2' : '3'}"><span class="wdot wdot-${w.value}"></span><span class="wlbl">${w.label}</span></button>`).join('')}
-              </div>
+              <div class="wbar" role="slider" aria-label="Толщина"><span class="wwedge"></span><span class="wknob"></span></div>
+              <div class="wtags"><span>тонко</span><span>средне</span><span>толсто</span></div>
             </div>
             <div class="grp">
               <span class="grpttl">Тип</span>
@@ -473,19 +518,50 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   // handler below can reference them safely (JS hoists function declarations, not const arrows).
   function pickColor(c: string): void {
     ann.setColor(c)
-    root.querySelectorAll('.cstep').forEach((s) => s.classList.toggle('on', (s as HTMLElement).dataset.c === c))
+    const i = Math.max(0, DEFAULT_COLORS.indexOf(c))
+    const knob = root.querySelector('.cknob') as HTMLElement | null
+    if (knob) {
+      knob.style.left = `${((i + 0.5) / DEFAULT_COLORS.length) * 100}%`
+      knob.style.color = c
+    }
   }
   function pickWidth(w: Width): void {
     ann.setWidth(w)
-    root.querySelectorAll('.wstep').forEach((el) => el.classList.toggle('on', (el as HTMLElement).dataset.w === w))
+    const knob = root.querySelector('.wknob') as HTMLElement | null
+    if (knob) {
+      knob.style.left = w === 'thin' ? '16%' : w === 'med' ? '50%' : '84%'
+      knob.style.width = w === 'thin' ? '12px' : w === 'med' ? '16px' : '22px'
+      knob.style.height = knob.style.width
+      knob.style.marginLeft = `-${parseInt(knob.style.width, 10) / 2}px`
+      knob.style.marginTop = `-${parseInt(knob.style.width, 10) / 2}px`
+    }
   }
 
   // Standard editor hotkeys across the whole overlay. Keyed off e.code (PHYSICAL key: 'KeyP', 'KeyZ', 'Digit1'),
   // NOT e.key — so they work under any keyboard layout (RU/EN/HU) and on every OS, where e.key would return a
   // layout-dependent character (physical P → 'з' on the Russian layout) and the mapping would miss. Single-key
   // shortcuts are skipped while typing in a field; the undo/redo stack is the annotator's unified one (draw+crop).
-  const TOOL_CODES: Record<string, Tool> = { KeyP: 'draw', KeyA: 'arrow', KeyR: 'rect', KeyT: 'text', KeyE: 'eraser', KeyC: 'crop' }
-  const WIDTH_CODES: Record<string, Width> = { Digit1: 'thin', Digit2: 'med', Digit3: 'thick', Numpad1: 'thin', Numpad2: 'med', Numpad3: 'thick' }
+  // Two hotkey layouts the tester can switch between (a dropdown next to the tools row shows the mapping):
+  //   • designer — mnemonic letters (R rectangle, A arrow, O oval, P pencil, C crop, T text, E eraser)
+  //   • gamer — CS-style, tools bound to number-row like weapons and the workhorse keys (Q undo, E redo)
+  //     so a player-tester keeps left-hand muscle memory and never has to hunt.
+  const TOOL_LAYOUTS: Record<'designer' | 'gamer', Record<string, Tool>> = {
+    designer: { KeyR: 'rect', KeyA: 'arrow', KeyO: 'ellipse', KeyP: 'draw', KeyC: 'crop', KeyT: 'text', KeyE: 'eraser' },
+    gamer: { Digit1: 'rect', Digit2: 'arrow', Digit3: 'ellipse', Digit4: 'draw', Digit5: 'crop', Digit6: 'text', Digit7: 'eraser' },
+  }
+  const WIDTH_LAYOUTS: Record<'designer' | 'gamer', Record<string, Width>> = {
+    designer: { Digit1: 'thin', Digit2: 'med', Digit3: 'thick', Numpad1: 'thin', Numpad2: 'med', Numpad3: 'thick' },
+    // In gamer mode the digits pick TOOLS (weapons), so width lives on the middle row — Shift+A/S/D or the QWE
+    // above the tools row.
+    gamer: { KeyZ: 'thin', KeyX: 'med', KeyM: 'thick' },
+  }
+  const LAYOUT_KEY = 'th.layout'
+  let layout: 'designer' | 'gamer' = (localStorage.getItem(LAYOUT_KEY) as 'designer' | 'gamer' | null) || 'designer'
+  const setLayout = (l: 'designer' | 'gamer') => { layout = l; localStorage.setItem(LAYOUT_KEY, l); syncLayoutUI() }
+  let TOOL_CODES = TOOL_LAYOUTS[layout]
+  let WIDTH_CODES = WIDTH_LAYOUTS[layout]
+  const UNDO_KEYS = () => (layout === 'gamer' ? ['KeyQ'] : []) // Ctrl+Z always works too
+  const REDO_KEYS = () => (layout === 'gamer' ? ['KeyR'] : [])
   function onKey(e: KeyboardEvent) {
     const ae = root.activeElement as HTMLElement | null
     const typing = !!ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')
@@ -499,6 +575,10 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
 
     if (code === 'Escape') { if (typing) return; e.preventDefault(); close(); return }
     if (typing) return
+
+    // Gamer-mode single-key aliases for undo/redo (Q/E, CS drop/use muscle memory).
+    if (UNDO_KEYS().includes(code)) { e.preventDefault(); ann.undo(); return }
+    if (REDO_KEYS().includes(code)) { e.preventDefault(); ann.redo(); return }
 
     if (e.shiftKey && (code === 'Delete' || code === 'Backspace')) { e.preventDefault(); ann.clearAll(); return }
     const tool = TOOL_CODES[code]
@@ -829,9 +909,10 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     redoBtn.disabled = !ann.canRedo()
     clearBtn.disabled = !ann.canClear()
     root.querySelectorAll('.tb.tool').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.tool === ann.tool))
-    canvas.classList.toggle('crop', ann.tool === 'crop')
-    canvas.classList.toggle('text', ann.tool === 'text')
-    canvas.classList.toggle('eraser', ann.tool === 'eraser')
+    // Reflect the current tool on the canvas so its cursor changes accordingly (see .canvas.<tool> rules).
+    for (const t of ['rect', 'arrow', 'ellipse', 'text', 'crop', 'draw', 'eraser'] as const) {
+      canvas.classList.toggle(t, ann.tool === t)
+    }
   }
 
   const openTextInput = (clientX: number, clientY: number) => {
@@ -872,14 +953,69 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   })
   tinInput.addEventListener('blur', commitTextInput)
 
-  root.querySelectorAll('.cstep').forEach((el) =>
-    el.addEventListener('click', () => pickColor((el as HTMLElement).dataset.c!)),
+  // Colour + width sliders — click to pick, drag to scrub. Each slider snaps to its notches, so the palette
+  // still reads as a real set of choices and not a fuzzy continuum.
+  const cbar = q<HTMLElement>('.cbar')
+  const cknob = q<HTMLElement>('.cknob')
+  const wbar = q<HTMLElement>('.wbar')
+  const wknob = q<HTMLElement>('.wknob')
+
+  const cbarPick = (x: number) => {
+    const r = cbar.getBoundingClientRect()
+    const t = Math.max(0, Math.min(1, (x - r.left) / (r.width || 1)))
+    const i = Math.min(DEFAULT_COLORS.length - 1, Math.floor(t * DEFAULT_COLORS.length))
+    pickColor(DEFAULT_COLORS[i]!)
+  }
+  const wbarPick = (x: number) => {
+    const r = wbar.getBoundingClientRect()
+    const t = Math.max(0, Math.min(1, (x - r.left) / (r.width || 1)))
+    pickWidth(t < 0.34 ? 'thin' : t < 0.67 ? 'med' : 'thick')
+  }
+
+  // Pointer capture makes the knob follow the finger past the slider's own edges (and past its element for
+  // mouse users) — same reliability as native <input type=range>.
+  function bindSlider(bar: HTMLElement, onPick: (x: number) => void) {
+    bar.addEventListener('pointerdown', (e) => {
+      bar.setPointerCapture(e.pointerId)
+      onPick(e.clientX)
+      const move = (ev: PointerEvent) => onPick(ev.clientX)
+      const up = () => { bar.removeEventListener('pointermove', move); bar.removeEventListener('pointerup', up); bar.removeEventListener('pointercancel', up) }
+      bar.addEventListener('pointermove', move)
+      bar.addEventListener('pointerup', up)
+      bar.addEventListener('pointercancel', up)
+    })
+  }
+  bindSlider(cbar, cbarPick)
+  bindSlider(wbar, wbarPick)
+
+  // Hotkey layout picker in the tools header.
+  const lytBtn = q<HTMLElement>('.lytbtn')
+  const lytPop = q<HTMLElement>('.lytpop')
+  const lytName = q<HTMLElement>('.lytname')
+  function syncLayoutUI() {
+    lytName.textContent = layout
+    root.querySelectorAll('.lyto').forEach((el) => el.classList.toggle('on', (el as HTMLElement).dataset.lyt === layout))
+    TOOL_CODES = TOOL_LAYOUTS[layout]
+    WIDTH_CODES = WIDTH_LAYOUTS[layout]
+    // Rewrite tool tooltips so hovering shows the CURRENT layout's key, not a stale one.
+    const keyFor = (t: Tool) => Object.entries(TOOL_CODES).find(([, v]) => v === t)?.[0]?.replace(/^Key|^Digit/, '') || '—'
+    const labels: Record<Tool, string> = { rect: 'Рамка', arrow: 'Стрелка', ellipse: 'Овал', draw: 'Карандаш', crop: 'Кадрирование', text: 'Текст', eraser: 'Ластик' }
+    root.querySelectorAll('.tb.tool').forEach((el) => {
+      const t = (el as HTMLElement).dataset.tool as Tool
+      ;(el as HTMLElement).title = `${labels[t]} · ${keyFor(t)}`
+    })
+  }
+  lytBtn.addEventListener('click', (e) => { e.stopPropagation(); lytPop.classList.toggle('on') })
+  root.querySelectorAll('.lyto').forEach((el) =>
+    el.addEventListener('click', () => {
+      setLayout((el as HTMLElement).dataset.lyt as 'designer' | 'gamer')
+      lytPop.classList.remove('on')
+    }),
   )
+  root.addEventListener('click', (e) => { if (!(e.target as HTMLElement).closest?.('.lyt')) lytPop.classList.remove('on') })
+  syncLayoutUI()
   root.querySelectorAll('.tb.tool').forEach((el) =>
     el.addEventListener('click', () => ann.setTool((el as HTMLElement).dataset.tool as Tool)),
-  )
-  root.querySelectorAll('.wstep').forEach((el) =>
-    el.addEventListener('click', () => pickWidth((el as HTMLElement).dataset.w as Width)),
   )
   root.querySelectorAll('.seg.type button').forEach((el) =>
     el.addEventListener('click', () => {
