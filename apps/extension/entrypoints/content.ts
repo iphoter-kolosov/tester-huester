@@ -655,7 +655,9 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   let trim: { from: number; to: number } | null = null // chosen stretch (seconds from clip start), null = whole
   // The recorded tab video (webm as a data URL). This is the primary recording now; the DOM buffer stays only
   // as a small context fallback.
-  let video: { dataUrl: string; seconds: number; bytes: number; frames: { at: number; dataUrl: string }[] } | null = null
+  // The offscreen recorder now uploads directly to /api/upload/video and returns a URL — nothing large ever
+  // crosses the MV3 message boundary (which has a 64 MiB per-message cap). We keep only the URL and size.
+  let video: { url: string; seconds: number; bytes: number; capped?: boolean; frames: { at: number; dataUrl: string }[] } | null = null
 
   // The exact events Send will attach. Physically the clip starts at the checkpoint at/before `from` (a clip
   // must open on a snapshot); `replayTrim` rides alongside so the dashboard plays exactly the chosen stretch.
@@ -1148,7 +1150,8 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
 
     // Record the tab as VIDEO. A DOM replay reconstructs markup, which for app-heavy pages plays back as
     // "some other layer of the site plus a moving cursor" — useless for behavioural bugs. This records pixels.
-    const started = await chrome.runtime.sendMessage({ type: 'TH_VIDEO_START', maxSeconds: 300 }).catch((e) => ({ ok: false, error: String(e) }))
+    const cfgForVideo = await getConfig()
+    const started = await chrome.runtime.sendMessage({ type: 'TH_VIDEO_START', maxSeconds: 300, collectorUrl: cfgForVideo.collectorUrl }).catch((e) => ({ ok: false, error: String(e) }))
     if (!started?.ok) {
       setMsg('Не удалось начать запись экрана: ' + (started?.error || 'нет доступа к вкладке'), 'err')
       recBtn.disabled = false
@@ -1199,16 +1202,18 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       host.style.display = ''
       document.addEventListener('keydown', onKey, true)
 
-      if (res?.ok && res.dataUrl) {
-        video = { dataUrl: res.dataUrl as string, seconds: Number(res.seconds || 0), bytes: Number(res.bytes || 0), frames: Array.isArray(res.frames) ? res.frames : [] }
+      if (res?.ok && res.url) {
+        video = { url: res.url as string, seconds: Number(res.seconds || 0), bytes: Number(res.bytes || 0), capped: !!res.capped, frames: Array.isArray(res.frames) ? res.frames : [] }
         attach = true
         updateClipPanel()
         const dur = fmtDur(video.seconds)
         const mb = (video.bytes / 1e6).toFixed(1)
+        // If the recorder auto-stopped at the size cap, say so — the tester expected it to run longer.
+        const cappedNote = video.capped ? ' — обрезано на лимите 38 МБ (5 мин записи ≈ 30 МБ)' : ''
         setMsg(
-          shotOk ? `Видео записано: ${dur} · ${mb} МБ ✓ — допишите заметку и Send`
-                 : `Видео записано: ${dur} · ${mb} МБ ✓ (скриншот не обновился)`,
-          'ok',
+          shotOk ? `Видео записано: ${dur} · ${mb} МБ ✓ — допишите заметку и Send${cappedNote}`
+                 : `Видео записано: ${dur} · ${mb} МБ ✓ (скриншот не обновился)${cappedNote}`,
+          video.capped ? 'warn' : 'ok',
         )
       } else {
         setMsg('Запись не получилась: ' + (res?.error || 'пустой файл'), 'err')
@@ -1325,7 +1330,9 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
           replayBytes,
           replayTrim: sel.trim,
           // The recorded tab video, when there is one — already webm-compressed, sent as-is.
-          video: attach && video ? video.dataUrl : undefined,
+          // The offscreen recorder already uploaded the video and gave us its URL — hand that to the collector
+          // instead of the megabytes. `video` (data URL) stays supported by the endpoint for older builds.
+          videoUrl: attach && video ? video.url : undefined,
           videoSeconds: attach && video ? Math.round(video.seconds) : undefined,
           // The stretch chosen in the editor — the dashboard plays exactly this, so the reader sees the moment
           // that matters instead of the whole run-up.

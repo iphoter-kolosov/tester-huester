@@ -132,6 +132,11 @@ export async function POST(req: Request) {
       console.warn('ingest: video store failed:', e)
     }
   }
+  // Preferred path: the extension already uploaded the video via /api/upload/video and gives us the URL. Keep
+  // the string to a safe /api/asset/<file>.(webm|mp4) shape so an attacker can't smuggle an arbitrary URL.
+  if (!videoUrl && typeof body.videoUrl === 'string' && /^\/api\/asset\/[a-zA-Z0-9_-]+\.(webm|mp4)$/.test(body.videoUrl)) {
+    videoUrl = body.videoUrl
+  }
 
   // Stills sampled from the recording. Stored as ordinary images so an agent can LOOK at them — it cannot
   // watch a webm, and a video nobody on the fixing side can open is a dead end.

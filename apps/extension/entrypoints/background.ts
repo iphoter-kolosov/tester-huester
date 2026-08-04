@@ -88,11 +88,11 @@ export default defineBackground(() => {
     })
   }
 
-  async function startVideo(tabId: number, maxSeconds?: number) {
+  async function startVideo(tabId: number, maxSeconds?: number, collectorUrl?: string) {
     try {
       await ensureOffscreen()
       const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tabId })
-      return await chrome.runtime.sendMessage({ type: 'TH_OFF_START', streamId, maxSeconds })
+      return await chrome.runtime.sendMessage({ type: 'TH_OFF_START', streamId, maxSeconds, collectorUrl })
     } catch (e) {
       return { ok: false, error: String((e as Error)?.message || e) }
     }
@@ -139,7 +139,7 @@ export default defineBackground(() => {
     if (msg?.type === 'TH_VIDEO_START') {
       const tabId = sender.tab?.id
       if (tabId == null) { sendResponse({ ok: false, error: 'no tab' }); return true }
-      startVideo(tabId, msg.maxSeconds).then(sendResponse)
+      startVideo(tabId, msg.maxSeconds, msg.collectorUrl).then(sendResponse)
       return true
     }
     if (msg?.type === 'TH_VIDEO_STOP') {

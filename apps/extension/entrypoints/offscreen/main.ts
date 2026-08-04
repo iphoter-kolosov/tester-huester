@@ -6,7 +6,7 @@
 // instead of a DOM event log that has to be reconstructed (and, on app-heavy pages, reconstructs into an
 // unrecognisable frame).
 
-type StartMsg = { type: 'TH_OFF_START'; streamId: string; maxSeconds?: number }
+type StartMsg = { type: 'TH_OFF_START'; streamId: string; maxSeconds?: number; collectorUrl: string }
 type StopMsg = { type: 'TH_OFF_STOP' }
 
 let recorder: MediaRecorder | null = null
@@ -50,10 +50,17 @@ function thinFrames(list: { at: number; dataUrl: string }[], max = MAX_FRAMES) {
   return out
 }
 
-// 2.5 Mbps at 1080p-ish is plenty for UI recordings and keeps a 2-minute clip in the tens of MB before it is
-// capped; the collector rejects anything over its own limit anyway.
-const BITS_PER_SECOND = 2_500_000
+// UI recordings compress well; 1.2 Mbps stays legible for a dashboard and keeps a 5-minute clip well under the
+// collector's 40 MB cap (≈ 9 MB/min). A dedicated smoke-test at 2.5 Mbps hit 19 MB/min which blew MV3's
+// 64 MiB sendMessage limit — the messaging path is gone now (offscreen uploads directly), but a lower bitrate
+// still saves bandwidth and disk with no visible loss for UI capture.
+const BITS_PER_SECOND = 1_200_000
 const HARD_CAP_S = 300
+// Own record of running size, so we can stop early instead of letting MediaRecorder blow past the collector cap.
+let totalBytes = 0
+const SIZE_CAP_BYTES = 38 * 1024 * 1024 // slightly under the server's 40 MB limit — leave headroom for the last chunk
+let collectorUrl = ''
+let stoppedByCap = false
 
 function pickMime(): string {
   const candidates = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm']
@@ -73,7 +80,20 @@ async function start(msg: StartMsg): Promise<{ ok: boolean; error?: string }> {
     const mimeType = pickMime()
     recorder = new MediaRecorder(stream, mimeType ? { mimeType, videoBitsPerSecond: BITS_PER_SECOND } : undefined)
     chunks = []
-    recorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data) }
+    totalBytes = 0
+    stoppedByCap = false
+    collectorUrl = msg.collectorUrl
+    recorder.ondataavailable = (e) => {
+      if (!e.data || !e.data.size) return
+      chunks.push(e.data)
+      totalBytes += e.data.size
+      // Stop cleanly the moment we approach the collector's cap. Better a clean 38 MB clip than a broken 50 MB
+      // one the server would refuse and the tester would have to redo.
+      if (totalBytes >= SIZE_CAP_BYTES && !stoppedByCap && recorder && recorder.state === 'recording') {
+        stoppedByCap = true
+        try { recorder.stop() } catch {}
+      }
+    }
     recorder.start(1000) // emit a chunk per second so a crash still leaves usable footage
     startedAt = Date.now()
 
@@ -107,7 +127,7 @@ function cleanup(): void {
   recorder = null
 }
 
-async function stop(): Promise<{ ok: boolean; dataUrl?: string; seconds?: number; bytes?: number; frames?: { at: number; dataUrl: string }[]; error?: string }> {
+async function stop(): Promise<{ ok: boolean; url?: string; seconds?: number; bytes?: number; capped?: boolean; frames?: { at: number; dataUrl: string }[]; error?: string }> {
   const rec = recorder
   if (!rec) return { ok: false, error: 'not recording' }
   const seconds = (Date.now() - startedAt) / 1000
@@ -115,22 +135,40 @@ async function stop(): Promise<{ ok: boolean; dataUrl?: string; seconds?: number
   const shots = thinFrames(frames)
 
   const blob: Blob = await new Promise((resolve) => {
+    if (rec.state === 'inactive') {
+      resolve(new Blob(chunks, { type: rec.mimeType || 'video/webm' }))
+      return
+    }
     rec.onstop = () => resolve(new Blob(chunks, { type: rec.mimeType || 'video/webm' }))
     try { rec.stop() } catch { resolve(new Blob(chunks, { type: 'video/webm' })) }
   })
+  const wasCapped = stoppedByCap
+  const dest = collectorUrl
   cleanup()
 
-  // Hand the video back as a data URL: it crosses the extension message boundary as a plain string, which is
-  // the only shape that survives to the background worker without a second transport.
-  const dataUrl: string = await new Promise((resolve) => {
-    const fr = new FileReader()
-    fr.onload = () => resolve(String(fr.result || ''))
-    fr.onerror = () => resolve('')
-    fr.readAsDataURL(blob)
-  })
-  chunks = []
-  frames = []
-  return { ok: !!dataUrl, dataUrl, seconds, bytes: blob.size, frames: shots, error: dataUrl ? undefined : 'encode failed' }
+  if (!blob.size) return { ok: false, error: 'empty recording' }
+
+  // Upload the video BINARY directly from this offscreen page — it has fetch() and the extension's origin, and
+  // /api/upload/video is CORS-open. This bypasses MV3's 64 MiB sendMessage cap entirely: nothing large ever
+  // crosses the extension message boundary. Only the tiny returned URL does.
+  try {
+    const res = await fetch(dest.replace(/\/+$/, '') + '/api/upload/video', {
+      method: 'POST',
+      headers: { 'content-type': blob.type || 'video/webm' },
+      body: blob,
+    })
+    const j = (await res.json().catch(() => null)) as { ok?: boolean; url?: string; error?: string } | null
+    chunks = []
+    frames = []
+    if (!res.ok || !j?.ok || !j.url) {
+      return { ok: false, error: j?.error || `HTTP ${res.status}`, bytes: blob.size, capped: wasCapped, frames: shots }
+    }
+    return { ok: true, url: j.url, seconds, bytes: blob.size, capped: wasCapped, frames: shots }
+  } catch (e) {
+    chunks = []
+    frames = []
+    return { ok: false, error: 'network: ' + String((e as Error)?.message || e), bytes: blob.size, capped: wasCapped, frames: shots }
+  }
 }
 
 chrome.runtime.onMessage.addListener((msg: StartMsg | StopMsg, _sender, sendResponse) => {
