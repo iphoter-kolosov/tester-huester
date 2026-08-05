@@ -7,6 +7,7 @@ import EditableNote from '@/components/EditableNote'
 import CommentThread from '@/components/CommentThread'
 import CopyId from '@/components/CopyId'
 import ShotWithEditor from '@/components/ShotWithEditor'
+import VerifyBlock from '@/components/VerifyBlock'
 import ReproContext from '@/components/ReproContext'
 import ReplayPlayer from '@/components/ReplayPlayer'
 import VideoPlayer from '@/components/VideoPlayer'
@@ -21,6 +22,8 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
   if (!r) notFound()
   const projOpts = repo.listProjects().map((p) => ({ value: p.id, label: p.name }))
   const comments = repo.listComments(r.id)
+  // Pin the newest check at the top: when a ticket says "fixed", the first thing the reporter needs is the link.
+  const check = repo.latestVerification(r.id)
   return (
     <main className="wrap">
       <Link className="back" href="/">← все тикеты</Link>
@@ -34,6 +37,13 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
       <div className="dctl">
         <RowControls id={r.id} type={r.type} severity={r.severity} status={r.status} projectId={r.projectId} projects={projOpts} archived={r.archived} />
       </div>
+
+      {check ? (
+        <VerifyBlock url={check.verifyUrl} steps={check.verifySteps} author={check.author} />
+      ) : r.status === 'fixed' ? (
+        // Closed with no check attached — either an older ticket or a human flipped the status by hand.
+        <div className="vfymissing">Помечен как исправленный, но проверочной ссылки к нему не приложено.</div>
+      ) : null}
 
       {r.screenshotUrl ? <ShotWithEditor src={r.screenshotUrl} reportId={r.id} /> : null}
 

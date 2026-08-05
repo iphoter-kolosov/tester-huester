@@ -1,2 +1,5 @@
 export { repo, ensureSchema } from './db'
 export type { Project, Report, NewReport, ReportType, Severity } from './db'
+export { checkAgentStatusClaim, normalizeVerifyUrl, normalizeSteps } from './verify'
+export type { Verification, VerifyError } from './verify'
+export type { Comment, AuthorKind, ChangeEvent } from './db'

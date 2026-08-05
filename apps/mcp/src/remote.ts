@@ -110,9 +110,16 @@ server.tool(
 
 server.tool(
   'add_comment',
-  "Post a comment on a report in THIS project — report back what you did (commit/PR, what was actually wrong), why you could not reproduce it, or what you need from the reporter. The comment is attributed to this project and appears in the ticket's thread, where the human can reply. Use it whenever you change a status, so 'fixed' is never a bare word.",
-  { id: z.string(), body: z.string().min(1).max(4000) },
-  async ({ id, body }) => ({ content: [{ type: 'text', text: await patch(`/api/reports/${encodeURIComponent(id)}/comments`, { body }, 'POST') }] }),
+  "Post a comment on a report in THIS project — report back what you did (commit/PR, what was actually wrong), why you could not reproduce it, or what you need from the reporter. Attach `verifyUrl` (an absolute http(s) link the reporter can click to see the thing you are describing) and `verifySteps` whenever your comment makes a claim about behaviour — the dashboard turns them into a one-click 'Проверить' block. The comment is attributed to this project and appears in the ticket's thread, where the human can reply.",
+  {
+    id: z.string(),
+    body: z.string().min(1).max(4000),
+    verifyUrl: z.string().url().optional().describe('Absolute http(s) link that lands on the screen in question — as deep as possible, not just the site root.'),
+    verifySteps: z.array(z.string().min(1).max(300)).max(12).optional().describe('Short numbered steps to see it, if opening the link is not enough by itself.'),
+  },
+  async ({ id, body, verifyUrl, verifySteps }) => ({
+    content: [{ type: 'text', text: await patch(`/api/reports/${encodeURIComponent(id)}/comments`, { body, verifyUrl, verifySteps }, 'POST') }],
+  }),
 )
 
 server.tool(
@@ -124,9 +131,30 @@ server.tool(
 
 server.tool(
   'set_status',
-  "Update the triage status of one report in THIS project as you work through it: 'triaged' when you pick it up, 'fixed' when done, 'wontfix' if declined. Only reports belonging to this project can be changed.",
-  { id: z.string(), status: STATUS },
-  async ({ id, status }) => ({ content: [{ type: 'text', text: await patch(`/api/reports/${encodeURIComponent(id)}`, { status }) }] }),
+  [
+    "Update the triage status of one report in THIS project as you work through it: 'triaged' when you pick it up,",
+    "'fixed' when done, 'wontfix' if declined. Only reports belonging to this project can be changed.",
+    '',
+    'CLOSING A TICKET REQUIRES EVIDENCE — the server rejects the call otherwise:',
+    "  • fixed   → `comment` (what was actually wrong and what changed, with the commit/PR) AND `verifyUrl`",
+    '              (an absolute http(s) link the reporter clicks to see it — as deep as possible, landing on the',
+    '              exact screen, not the site root). Add `verifySteps` unless the fix is obvious the moment the',
+    '              link opens.',
+    "  • wontfix → `comment` explaining why it is declined.",
+    "  • triaged/new → nothing extra; picking a ticket up is not a claim.",
+    '',
+    'The comment is posted together with the status in one atomic call — you do not need a separate add_comment.',
+  ].join('\n'),
+  {
+    id: z.string(),
+    status: STATUS,
+    comment: z.string().min(1).max(4000).optional().describe("Required for fixed/wontfix: what was actually wrong, what changed, which commit."),
+    verifyUrl: z.string().url().optional().describe("Required for 'fixed': absolute http(s) link that opens the fixed screen directly."),
+    verifySteps: z.array(z.string().min(1).max(300)).max(12).optional().describe('Steps the reporter follows after opening the link. Omit only when the fix is visible immediately.'),
+  },
+  async ({ id, status, comment, verifyUrl, verifySteps }) => ({
+    content: [{ type: 'text', text: await patch(`/api/reports/${encodeURIComponent(id)}`, { status, comment, verifyUrl, verifySteps }) }],
+  }),
 )
 
 const transport = new StdioServerTransport()

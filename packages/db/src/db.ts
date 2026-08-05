@@ -93,6 +93,11 @@ function db(): DatabaseSync {
   // Server-side cursor per project: an agent that restarts (or crashes mid-work) resumes exactly where it left
   // off instead of losing events or re-reading the whole board.
   if (!columnExists(c, 'projects', 'agent_cursor')) c.exec('ALTER TABLE projects ADD COLUMN agent_cursor integer NOT NULL DEFAULT 0')
+  // How to CHECK the claim. An agent reporting "fixed" has to say where to look (an absolute http(s) link) and,
+  // when opening the link isn't self-evident, the steps to reproduce the check. Stored on the comment because
+  // the claim belongs to the message that made it — a later comment can supersede it with a new link.
+  if (!columnExists(c, 'comments', 'verify_url')) c.exec('ALTER TABLE comments ADD COLUMN verify_url text')
+  if (!columnExists(c, 'comments', 'verify_steps')) c.exec('ALTER TABLE comments ADD COLUMN verify_steps text')
   backfillReadKeys(c)
   return c
 }
@@ -135,10 +140,20 @@ export type ChangeEvent = { seq: number; projectId: string; reportId: string; ki
 const toEvent = (r: any): ChangeEvent => ({ seq: r.seq, projectId: r.project_id, reportId: r.report_id, kind: r.kind as EventKind, actor: r.actor, detail: r.detail ?? null, createdAt: r.created_at })
 
 export type AuthorKind = 'agent' | 'human'
-export type Comment = { id: string; reportId: string; author: string; authorKind: AuthorKind; body: string; createdAt: number }
+// `verifyUrl` / `verifySteps` are the check the author is handing over: WHERE to look and HOW. Required of an
+// agent claiming 'fixed' (enforced at the API layer), optional on any other comment.
+export type Comment = {
+  id: string; reportId: string; author: string; authorKind: AuthorKind; body: string; createdAt: number
+  verifyUrl: string | null; verifySteps: string[] | null
+}
 
 const toProject = (r: any): Project => ({ id: r.id, name: r.name, ingestKey: r.ingest_key, readKey: r.read_key ?? '', createdAt: r.created_at })
-const toComment = (r: any): Comment => ({ id: r.id, reportId: r.report_id, author: r.author, authorKind: (r.author_kind ?? 'human') as AuthorKind, body: r.body, createdAt: r.created_at })
+const toComment = (r: any): Comment => ({
+  id: r.id, reportId: r.report_id, author: r.author, authorKind: (r.author_kind ?? 'human') as AuthorKind,
+  body: r.body, createdAt: r.created_at,
+  verifyUrl: r.verify_url ?? null,
+  verifySteps: (() => { const v = parseJson(r.verify_steps); return Array.isArray(v) ? (v as string[]) : null })(),
+})
 const toReport = (r: any): Report => ({
   id: r.id, shortId: shortId(r.id), projectId: r.project_id, note: r.note, screenshotUrl: r.screenshot_url, pageUrl: r.page_url,
   viewport: r.viewport, userAgent: r.user_agent, reporter: r.reporter, status: r.status, createdAt: r.created_at,
@@ -300,11 +315,18 @@ export const repo = {
     const rows = db().prepare('SELECT * FROM comments WHERE report_id = ? ORDER BY created_at ASC').all(reportId)
     return rows.map(toComment)
   },
-  addComment(x: { reportId: string; author: string; authorKind: AuthorKind; body: string }): Comment {
+  addComment(x: { reportId: string; author: string; authorKind: AuthorKind; body: string; verifyUrl?: string | null; verifySteps?: string[] | null }): Comment {
     const id = crypto.randomUUID()
-    db().prepare('INSERT INTO comments (id, report_id, author, author_kind, body, created_at) VALUES (?,?,?,?,?,?)')
-      .run(id, x.reportId, x.author, x.authorKind, x.body, Date.now())
+    const steps = x.verifySteps && x.verifySteps.length ? JSON.stringify(x.verifySteps) : null
+    db().prepare('INSERT INTO comments (id, report_id, author, author_kind, body, created_at, verify_url, verify_steps) VALUES (?,?,?,?,?,?,?,?)')
+      .run(id, x.reportId, x.author, x.authorKind, x.body, Date.now(), x.verifyUrl || null, steps)
     return toComment(db().prepare('SELECT * FROM comments WHERE id = ?').get(id))
+  },
+  // The most recent check handed over on this ticket — what the dashboard pins at the top so the reporter never
+  // has to hunt through the thread for "where do I look".
+  latestVerification(reportId: string): Comment | null {
+    const row = db().prepare('SELECT * FROM comments WHERE report_id = ? AND verify_url IS NOT NULL ORDER BY created_at DESC LIMIT 1').get(reportId)
+    return row ? toComment(row) : null
   },
   deleteComment(id: string): boolean {
     return db().prepare('DELETE FROM comments WHERE id = ?').run(id).changes > 0

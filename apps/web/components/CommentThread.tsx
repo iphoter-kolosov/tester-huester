@@ -1,8 +1,12 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import VerifyBlock from './VerifyBlock'
 
-export type CommentView = { id: string; author: string; authorKind: string; body: string; createdAt: number }
+export type CommentView = {
+  id: string; author: string; authorKind: string; body: string; createdAt: number
+  verifyUrl?: string | null; verifySteps?: string[] | null
+}
 
 // Very small markdown: bold **x**, code `x`, image ![alt](url). Nothing else — a full parser would over-invite
 // the tester to write HTML in a bug report. Split into segments so React renders <img>/<code>/<strong> safely,
@@ -147,6 +151,8 @@ export default function CommentThread({ reportId, comments }: { reportId: string
               return <span key={i}>{s.v}</span>
             })}
           </div>
+          {/* The check that came with this message — stays attached to the claim that made it. */}
+          <VerifyBlock url={c.verifyUrl ?? null} steps={c.verifySteps ?? null} compact />
         </div>
       ))}
 

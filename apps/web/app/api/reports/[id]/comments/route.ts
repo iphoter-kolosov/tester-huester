@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { repo } from '@th/db'
+import { repo, normalizeVerifyUrl, normalizeSteps } from '@th/db'
 import { isAuthed } from '@/lib/auth'
 
 export const runtime = 'nodejs'
@@ -49,7 +49,18 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const text = String(body.body ?? '').trim().slice(0, MAX_BODY)
   if (!text) return NextResponse.json({ ok: false, error: 'empty' }, { status: 400 })
 
-  const comment = repo.addComment({ reportId: r.report.id, author: r.author, authorKind: r.kind, body: text })
+  // Optional here (a comment is not a claim), but when present it is validated the same way as on a status
+  // change, so a link in the thread is always something the reporter can actually click.
+  const verifyUrl = normalizeVerifyUrl(body.verifyUrl)
+  const verifySteps = normalizeSteps(body.verifySteps)
+  if (body.verifyUrl && !verifyUrl) {
+    return NextResponse.json(
+      { ok: false, error: 'bad_verify_url', message: 'verifyUrl must be an absolute http(s) link the reporter can open.' },
+      { status: 400 },
+    )
+  }
+
+  const comment = repo.addComment({ reportId: r.report.id, author: r.author, authorKind: r.kind, body: text, verifyUrl, verifySteps })
   // Journalled so the other side notices without polling the whole board — this is how an agent learns the
   // reporter answered it.
   repo.logEvent({ projectId: r.report.projectId, reportId: r.report.id, kind: 'comment', actor: r.kind === 'agent' ? r.author : 'human', detail: text.slice(0, 200) })

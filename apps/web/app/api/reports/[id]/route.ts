@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { repo, type ReportType, type Severity } from '@th/db'
+import { repo, checkAgentStatusClaim, type ReportType, type Severity } from '@th/db'
 import { resolveProjectKey } from '@/lib/projectKey'
 import { isAuthed } from '@/lib/auth'
 
@@ -52,9 +52,28 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     if (!report || report.projectId !== project.id) {
       return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
     }
+    // A closing status must arrive WITH its evidence — see lib/verify.ts. Validated before anything is written,
+    // so a rejected claim leaves the ticket exactly as it was.
+    const claim = checkAgentStatusClaim(status, body, report.pageUrl)
+    if (!claim.ok) return NextResponse.json({ ok: false, ...claim.err }, { status: 400 })
+
     const ok = repo.setStatus(report.id, status)
-    if (ok) repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'status', actor: project.name, detail: `${report.status} → ${status}` })
-    return NextResponse.json({ ok }, { status: ok ? 200 : 404 })
+    if (!ok) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
+    repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'status', actor: project.name, detail: `${report.status} → ${status}` })
+    // The comment carries the claim, so the thread reads as a record: what changed, where to look, how to check.
+    let comment = null
+    if (claim.claim) {
+      comment = repo.addComment({
+        reportId: report.id,
+        author: project.name,
+        authorKind: 'agent',
+        body: claim.claim.body,
+        verifyUrl: claim.claim.verifyUrl,
+        verifySteps: claim.claim.verifySteps,
+      })
+      repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'comment', actor: project.name, detail: claim.claim.body.slice(0, 200) })
+    }
+    return NextResponse.json({ ok: true, status, comment })
   }
 
   // Human path: dashboard cookie. Full property editing — status, project, type, severity, note, archived.
