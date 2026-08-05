@@ -17,11 +17,21 @@ const MAX_BODY = 4000
 const MAX_STEPS = 12
 const MAX_STEP_LEN = 300
 
-/** Absolute http(s) only: the link has to work when pasted anywhere, including from a phone. */
+/** Hard ceiling on a stored link. Over this we REJECT rather than truncate — see below. */
+export const MAX_URL_LEN = 2000
+
+/**
+ * Absolute http(s) only: the link has to work when pasted anywhere, including from a phone.
+ *
+ * Length is a rejection, never a truncation. Cutting a signed deep link at 2000 chars produces a string that
+ * still parses as a URL and still renders as a button, so the damage is invisible until the reporter clicks it
+ * and lands on a 400 — corrupting the one artefact this whole contract exists to guarantee. Better to refuse
+ * loudly and let the agent shorten the link.
+ */
 export function normalizeVerifyUrl(v: unknown): string | null {
   if (typeof v !== 'string') return null
   const s = v.trim()
-  if (!s) return null
+  if (!s || s.length > MAX_URL_LEN) return null
   let u: URL
   try {
     u = new URL(s)
@@ -29,7 +39,8 @@ export function normalizeVerifyUrl(v: unknown): string | null {
     return null
   }
   if (u.protocol !== 'http:' && u.protocol !== 'https:') return null
-  return u.toString().slice(0, 2000)
+  const out = u.toString()
+  return out.length > MAX_URL_LEN ? null : out
 }
 
 export function normalizeSteps(v: unknown): string[] | null {
@@ -69,6 +80,21 @@ export function checkAgentStatusClaim(
     }
   }
   if (status === 'fixed' && !verifyUrl) {
+    // Distinguish "you didn't send one" from "what you sent was rejected" — an agent that passed a
+    // javascript:/ftp:/over-long URL otherwise re-sends the same broken value and loops.
+    const sent = typeof body.verifyUrl === 'string' ? body.verifyUrl.trim() : ''
+    if (sent) {
+      return {
+        ok: false,
+        err: {
+          error: 'verify_url_invalid',
+          message:
+            sent.length > MAX_URL_LEN
+              ? `"verifyUrl" is ${sent.length} characters — the limit is ${MAX_URL_LEN}. It is rejected rather than truncated, because a cut link still looks valid and would send the reporter to a broken page. Shorten it (drop signed tokens or tracking parameters) and resend.`
+              : `"verifyUrl" must be an ABSOLUTE http(s) link (got "${sent.slice(0, 80)}"). Relative paths and other schemes are refused — the reporter opens this from the dashboard and it has to work when pasted anywhere.`,
+        },
+      }
+    }
     const suggestion = normalizeVerifyUrl(pageUrl)
     return {
       ok: false,

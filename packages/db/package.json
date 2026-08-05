@@ -10,7 +10,8 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "seed": "tsx src/seed.ts"
+    "seed": "tsx src/seed.ts",
+    "test": "tsx src/verify.test.ts"
   },
   "devDependencies": {
     "tsx": "^4.19.2"
