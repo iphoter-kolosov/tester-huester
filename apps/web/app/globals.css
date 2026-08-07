@@ -318,3 +318,18 @@ button.tidbig { border: 0; padding: 0; }
 .vfymissing { border: 1px dashed color-mix(in srgb, #f59e0b 45%, var(--border)); background: color-mix(in srgb, #f59e0b 7%, transparent); border-radius: 10px; padding: 9px 13px; margin: 14px 0; font-size: 12.5px; color: #fcd34d; }
 /* board marker: this ticket carries a one-click check */
 .hascheck { font-size: 10px; font-weight: 800; color: var(--fixed); border: 1px solid color-mix(in srgb, var(--fixed) 45%, var(--border)); border-radius: 999px; padding: 1px 7px; }
+
+/* attachments: up to ten annotated images, each its own numbered unit with its own caption */
+.atts { margin-top: 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); padding: 14px 16px; }
+.attshead { display: flex; align-items: center; gap: 9px; margin-bottom: 6px; }
+.attsttl { font-weight: 800; font-size: 13px; }
+.attsn { font-size: 11px; font-weight: 800; color: var(--muted); background: var(--panel2); border: 1px solid var(--border); border-radius: 999px; padding: 1px 8px; }
+.att { margin: 0; padding: 12px 0; border-top: 1px solid var(--border); }
+.atttop { display: flex; align-items: center; gap: 10px; }
+.attnum { display: inline-flex; align-items: center; justify-content: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; background: var(--panel2); border: 1px solid var(--border); color: var(--accent); font-size: 11.5px; font-weight: 800; }
+.attopen { margin-left: auto; font-size: 11.5px; color: var(--muted); }
+.attopen:hover { color: var(--accent); }
+/* the annotate launcher sits inside .dshotwrap, whose image already carries the shared .dshot margins */
+.att .dshotedit { top: 22px; }
+.attcap { margin: 2px 0 0; font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; }
+.attcap-empty { color: var(--muted); font-style: italic; }

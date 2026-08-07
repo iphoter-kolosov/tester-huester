@@ -5,11 +5,15 @@ import ShotEditor from './ShotEditor'
 // Screenshot + a small "Annotate" launcher in the corner. Clicking opens the ShotEditor modal; the resulting
 // image URL is broadcast on a window event that the CommentThread reply box listens for and inserts as a
 // markdown image reference — the "look here" round-trip becomes a single modal.
-export default function ShotWithEditor({ src, reportId }: { src: string; reportId: string }) {
+// `linkFullSize` wraps the image in a plain link to the original file — used by the attachment gallery, where a
+// shot is displayed small and the reader needs the full-resolution pixels one click away. Off by default so the
+// ticket's main screenshot keeps behaving exactly as it did.
+export default function ShotWithEditor({ src, reportId, linkFullSize = false }: { src: string; reportId: string; linkFullSize?: boolean }) {
   const [open, setOpen] = useState(false)
+  const img = <img className="dshot" src={src} alt="" />
   return (
     <div className="dshotwrap">
-      <img className="dshot" src={src} alt="" />
+      {linkFullSize ? <a href={src} target="_blank" rel="noreferrer" title="Открыть в полный размер">{img}</a> : img}
       <button className="dshotedit" onClick={() => setOpen(true)}>✏ Разметить</button>
       {open && (
         <ShotEditor

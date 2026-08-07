@@ -1,8 +1,10 @@
 import { ImageAnnotator, DEFAULT_COLORS } from '@th/core'
-import type { ReproBundle, Tool, Width } from '@th/core'
+import type { Prim, ReproBundle, Tool, Width } from '@th/core'
 import { getConfig, setConfig } from '@/lib/config'
 import { buildReport, type ReportType, type Severity } from '@/lib/report'
 import { requestBundle } from '@/lib/bridge'
+import { loadDraft, saveDraft, flushDrafts, clearDraft, hasContent, type Draft, type DraftVideo } from '@/lib/draft'
+import { ICON_RECT, ICON_ARROW, ICON_ELLIPSE, ICON_PENCIL, ICON_CROP, ICON_TEXT, ICON_ERASER, TOOL_CURSORS, TOOL_LABELS } from '@/lib/glyphs'
 import {
   startReplay, bindVisibility, snapshotReplay, startExplicitClip, stopExplicitClip, clipSeconds,
   spanSeconds, recorderDiag, trimClip, trimPoints, REPLAY_BLOCK_CLASS, type RREvent,
@@ -32,18 +34,76 @@ export default defineContentScript({
       .catch(() => {})
 
     let open = false
-    chrome.runtime.onMessage.addListener((msg) => {
+    const origin = location.origin
+
+    // One path to a mounted overlay, so the shortcut and the automatic post-reload restore are wired
+    // identically. The `open` flag is raised synchronously, before the first await, so two triggers landing
+    // back-to-back cannot mount two overlays.
+    const openOverlay = async (shot: string, draft: Draft | null): Promise<void> => {
+      if (open) return
+      open = true
+      // Snapshot the repro bundle (action trail/console/net) at trigger — before the overlay mounts — so the
+      // tester's own clicks on our UI don't pollute it. The REPLAY, however, is snapshotted at SEND time (the
+      // overlay is block-classed out of the recording): this way a recorder that only just started on a freshly
+      // injected tab still has produced frames by the time the report is sent, instead of an empty capture.
+      const context = await requestBundle().catch(() => null)
+      mount(shot, context, draft, () => snapshotReplay(), () => { open = false })
+    }
+
+    chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       if (msg?.type === 'TH_OPEN' && !open) {
-        open = true
-        // Snapshot the repro bundle (action trail/console/net) at trigger — before the overlay mounts — so the
-        // tester's own clicks on our UI don't pollute it. The REPLAY, however, is snapshotted at SEND time (the
-        // overlay is block-classed out of the recording): this way a recorder that only just started on a freshly
-        // injected tab still has produced frames by the time the report is sent, instead of an empty capture.
-        requestBundle().then((context) => mount(msg.shot as string, context, () => snapshotReplay(), () => { open = false }))
+        void loadDraft(origin)
+          .catch(() => null)
+          .then((draft) => openOverlay(msg.shot as string, draft))
+        return undefined
       }
+      // The editor window has no access to the page's MAIN-world probe; this content script owns that bridge,
+      // so it answers on the window's behalf.
+      if (msg?.type === 'TH_CTX') {
+        requestBundle()
+          .then((bundle) => sendResponse({ ok: true, bundle }))
+          .catch((e) => sendResponse({ ok: false, error: String(e) }))
+        return true
+      }
+      // The standalone window is about to open: whatever is on screen here must be in the draft first, and
+      // this overlay must stop writing to it afterwards.
+      if (msg?.type === 'TH_ED_TAKEOVER') {
+        const hand = liveTakeover
+        if (!hand) { sendResponse({ ok: true, had: false }); return undefined }
+        hand()
+          .then(() => sendResponse({ ok: true, had: true }))
+          .catch((e) => sendResponse({ ok: false, error: String(e) }))
+        return true
+      }
+      return undefined
     })
+
+    // A capture that was on screen when the page died comes BACK on its own. The site under test is a dev
+    // server that reloads on every save; making the tester press the shortcut again would look exactly like
+    // the work had been lost, which is the failure this whole store exists to remove. Top frame only — every
+    // iframe runs this same script, and one overlay per page is one too many already.
+    if (window.top === window) {
+      void (async () => {
+        const draft = await loadDraft(origin).catch(() => null)
+        if (!draft?.open || !hasContent(draft)) return
+        // Only the SAME page coming back counts as "the page died under me". Navigating elsewhere on the site
+        // is a deliberate move, and having the overlay pop up on every page of the origin for the rest of the
+        // day would be its own kind of broken — the draft is still there, one shortcut press away.
+        if (draft.pageUrl !== location.href) return
+        let shot = draft.shot?.dataUrl ?? ''
+        if (!shot) {
+          const res = await chrome.runtime.sendMessage({ type: 'TH_SHOT' }).catch(() => null)
+          if (res?.ok && res.shot) shot = res.shot as string
+        }
+        await openOverlay(shot, draft)
+      })()
+    }
   },
 })
+
+// Set while an overlay is mounted: the background asks THIS overlay to hand its work over to the standalone
+// editor window before opening it. Module-scoped because the message listener lives outside mount()'s closure.
+let liveTakeover: (() => Promise<void>) | null = null
 
 // Report kinds, each with its own label + icon; the overlay title reflects the current selection.
 const TYPES: { value: ReportType; label: string; icon: string }[] = [
@@ -64,29 +124,6 @@ const WIDTHS: { value: Width; label: string }[] = [
   { value: 'thick', label: 'Толстая' },
 ]
 
-// Compact tool glyphs — one SVG each, currentColor so a button's own colour drives them. Icons are the shape
-// the tool leaves behind (a rectangle, a pointed arrow, a pencil, a marching-ants crop, a T, a slanted eraser)
-// so a tester glances at the panel and knows what will happen.
-const SVG = (path: string, stroke = false) =>
-  `<svg viewBox="0 0 24 24" width="18" height="18" fill="${stroke ? 'none' : 'currentColor'}" stroke="currentColor" stroke-width="${stroke ? 1.9 : 0}" stroke-linecap="round" stroke-linejoin="round">${path}</svg>`
-
-const ICON_RECT = SVG('<rect x="4" y="6" width="16" height="12" rx="1.5" ry="1.5" fill="none" stroke="currentColor" stroke-width="2"/>')
-const ICON_ELLIPSE = SVG('<ellipse cx="12" cy="12" rx="8.5" ry="6" fill="none" stroke="currentColor" stroke-width="2"/>')
-const ICON_ARROW = SVG('<path d="M4.5 13.5 L15 13.5 L15 9.5 L20.5 14.5 L15 19.5 L15 15.5 L4.5 15.5 Z"/>')
-const ICON_PENCIL = SVG(
-  '<path d="M14.5 4.5 L19.5 9.5 L9 20 L4 20 L4 15 Z" fill="currentColor"/>' +
-  '<path d="M13 6 L18 11" fill="none" stroke="rgba(255,255,255,.55)" stroke-width="1.4"/>' +
-  '<path d="M4.6 19.4 L8.6 19.4" fill="none" stroke="rgba(255,255,255,.65)" stroke-width="1.2"/>',
-)
-const ICON_CROP = SVG(
-  '<path d="M7 3 L7 17 L21 17" fill="none" stroke="currentColor" stroke-width="2"/>' +
-  '<path d="M3 7 L17 7 L17 21" fill="none" stroke="currentColor" stroke-width="2"/>',
-)
-const ICON_TEXT = SVG('<path d="M5 5 L19 5 L19 8 L14 8 L14 20 L10 20 L10 8 L5 8 Z"/>')
-const ICON_ERASER = SVG(
-  '<path d="M15.5 3.5 L20.5 8.5 L11 18 L4 18 L4 14.5 Z" fill="currentColor"/>' +
-  '<path d="M4 20 L20 20" fill="none" stroke="currentColor" stroke-width="2"/>',
-)
 
 const CSS = `
 :host, * { box-sizing: border-box; }
@@ -96,6 +133,13 @@ const CSS = `
    element that flexes, everything else keeps its natural size. */
 .card { position: relative; display: flex; flex-direction: column; gap: 8px; width: 98vw; max-width: 98vw; height: 96vh; max-height: 96vh; background: #131a2b; color: #e6edf7; border: 1px solid #223049; border-radius: 14px; padding: 12px; box-shadow: 0 30px 80px -20px rgba(0,0,0,.7); overflow: hidden; }
 .head { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; }
+/* Restored-draft bar: the tester must be told their old work is on screen, and must be able to refuse it in
+   one click. Amber rather than green — this is "here is something you left behind", not "all good". */
+.rest { display: none; align-items: center; gap: 10px; flex: 0 0 auto; padding: 8px 12px; border: 1px solid #a16207; background: rgba(161,98,7,.16); border-radius: 10px; font-size: 12.5px; font-weight: 700; color: #fcd34d; }
+.rest.on { display: flex; }
+.rest b { color: #fff; }
+.restx { margin-left: auto; height: 28px; padding: 0 12px; flex: 0 0 auto; border: 1px solid #a16207; background: transparent; color: #fcd34d; border-radius: 8px; font: inherit; font-weight: 800; cursor: pointer; }
+.restx:hover { background: rgba(161,98,7,.32); }
 .title { font-weight: 800; }
 .head .x { margin-left: auto; width: 30px; height: 30px; border-radius: 50%; border: 1px solid #223049; background: #0f1626; color: #8ea0bd; cursor: pointer; }
 
@@ -344,7 +388,16 @@ async function gzipToBase64(s: string): Promise<string> {
   }
 }
 
-function mount(shot: string, context: ReproBundle | null, getReplay: () => RREvent[], onClose: () => void) {
+function mount(shot: string, context: ReproBundle | null, draft: Draft | null, getReplay: () => RREvent[], onClose: () => void) {
+  const origin = location.origin
+  const openingShot = shot // kept aside: "Начать заново" throws the restored frame away and returns to this one
+  // Set once the draft has been deliberately discarded (sent, or thrown away by the tester). Nothing may
+  // resurrect it after that — not even the close handler writing `open: false`.
+  let draftDead = false
+  // Set when the standalone editor window has taken this report over. The draft is alive and well — it simply
+  // belongs to the window now, and a late debounced write from here would overwrite what the tester has since
+  // typed there.
+  let handedOver = false
   // The replay attached to this report. Starts as the auto retrospective (evaluated at send); an explicit
   // "record repro" clip replaces it. Kept as a thunk so auto stays live until the moment of sending.
   let replaySource = getReplay
@@ -360,6 +413,7 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     <style>${CSS}</style>
     <div class="scrim" part="scrim">
       <div class="card">
+        <div class="rest"><span class="restt"></span><button class="restx">Начать заново</button></div>
         <div class="head"><span class="title"></span><span class="recst"></span><span class="ctxhint"></span><button class="x" title="Close">✕</button></div>
         <div class="body">
           <div class="side">
@@ -426,9 +480,10 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
               <span class="msg"></span>
               <button class="btn ghost rec" title="Записать репро: свернуть окно, воспроизвести баг, ⏹ Стоп — клип прикрепится">🔴 Записать репро</button>
               <button class="btn ghost reshot" title="Переснять кадр: окно свернётся, подготовьте страницу и нажмите «Снять» — заметка, видео и настройки сохранятся">📸 Переснять кадр</button>
+              <button class="btn ghost toed" title="Продолжить в отдельном окне: страница больше не сможет помешать — можно добавлять вложения, вставлять картинки из буфера и не бояться перезагрузки сайта">⇗ Открыть в окне</button>
               <button class="btn send">Send</button>
               <button class="btn ghost cancel">Cancel</button>
-              <span class="khint"><b>Ctrl+Enter</b> отправить · <b>Esc</b> закрыть</span>
+              <span class="khint"><b>Ctrl+Enter</b> отправить · <b>Esc</b> свернуть (черновик сохранится)</span>
             </div>
           </div>
           <div class="main">
@@ -509,20 +564,83 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   const edSum = q<HTMLElement>('.edsum')
 
   // Form state (shared with track A via the exact field names note/type/severity).
-  let type: ReportType = 'bug'
-  let severity: Severity = 'med'
-  let projectId: string | null = null // chosen in the project picker; null → route by the ingest key
+  let type: ReportType = draft?.type ?? 'bug'
+  let severity: Severity = draft?.severity ?? 'med'
+  let projectId: string | null = draft?.projectId ?? null // chosen in the project picker; null → route by the ingest key
   let pendingText: { x: number; y: number } | null = null
+  // True while the restored draft is being put back on screen. The annotator fires onChange during that, and
+  // autosaving mid-restore would write an empty markup stack over the one we are in the middle of restoring.
+  let hydrating = true
+  // Attachments belong to the standalone editor window; this overlay has one canvas and cannot show them. It
+  // never destroys them either (the draft is shallow-merged), but it must not let the tester send a report
+  // that silently drops them, so the count is carried and named wherever it matters.
+  const draftAttachments = draft?.attachments?.length ?? 0
+
+  // Everything worth keeping, written to storage on every meaningful change. `immediate` skips the debounce:
+  // only note typing can afford to wait, because only note typing happens dozens of times a second.
+  function persist(patch: Partial<Draft> = {}, immediate = true): void {
+    if (draftDead || handedOver) return
+    const write = saveDraft(origin, {
+      pageUrl: location.href,
+      open: !closed,
+      note: note.value,
+      type,
+      severity,
+      projectId,
+      prims: ann.getPrims(),
+      video,
+      context: context ?? null,
+      ...patch,
+    })
+    // A draft that failed to save is worse than no draft — the tester would keep working believing they are
+    // covered. Say it out loud instead.
+    write.catch((e: unknown) => { if (!closed) setMsg('⚠ Черновик не сохранён: ' + String(e), 'warn') })
+    if (immediate) void flushDrafts()
+  }
+
+  // The backdrop is stored separately from the markup, so a crop (which replaces the backdrop) survives. Its
+  // only reliable outside signal is the canvas changing size, so that is what we watch.
+  let lastShotDims = ''
+  function persistShotIfChanged(): void {
+    const dims = `${canvas.width}x${canvas.height}`
+    if (dims === lastShotDims) return
+    lastShotDims = dims
+    persist({ shot: { dataUrl: ann.toBaseDataURL(0.85) } })
+  }
+
+  // Pack everything this overlay holds into the draft and step aside, so the standalone editor window can pick
+  // the report up exactly where it stands. The background calls this (TH_ED_TAKEOVER) before opening the
+  // window — from the ⇗ button, from the shortcut and from the popup alike, so the handover is one code path.
+  async function takeover(): Promise<void> {
+    if (closed) return
+    // The backdrop is normally written only when the canvas changes size. A handover must not ride on that
+    // heuristic: this frame IS the report.
+    persist({ shot: { dataUrl: ann.toBaseDataURL(0.85) }, open: false })
+    await flushDrafts()
+    handedOver = true
+    close()
+  }
 
   const close = () => {
     if (closed) return
     closed = true
+    liveTakeover = null
     if (activeRec) { activeRec(); activeRec = null } // kill an in-flight recording: bar, timer, listener, recorder
     if (recTimer) clearInterval(recTimer)
     document.removeEventListener('keydown', onKey, true)
+    window.removeEventListener('pagehide', onPageHide)
+    // Esc / ✕ keep the draft — only the flag saying "the overlay was on screen" is cleared, so the next page
+    // load does not pop the overlay open by itself.
+    persist({ open: false })
     host.remove()
     onClose()
   }
+
+  liveTakeover = takeover
+
+  // The debounce is a race against a page teardown; flush what is buffered while there is still a page.
+  const onPageHide = () => { if (!draftDead && !handedOver && !closed) { persist(); void flushDrafts() } }
+  window.addEventListener('pagehide', onPageHide)
 
   // Colour + width scales are set from click AND from hotkey; declared as function statements so the hotkey
   // handler below can reference them safely (JS hoists function declarations, not const arrows).
@@ -613,7 +731,14 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     const t = TYPES.find((x) => x.value === type)!
     titleEl.textContent = `${t.icon} ${t.label} — сообщить`
   }
-  syncTitle()
+  // Reflect the current type/severity onto the segmented controls. Needed because a restored draft can arrive
+  // with values the markup's hardcoded defaults do not match.
+  const syncTypeSev = () => {
+    root.querySelectorAll('.seg.type button').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.v === type))
+    root.querySelectorAll('.seg.sev button').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.v === severity))
+    syncTitle()
+  }
+  syncTypeSev()
 
   // Show the tester what technical context was captured alongside the screenshot.
   const hint = q<HTMLElement>('.ctxhint')
@@ -657,7 +782,9 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   // as a small context fallback.
   // The offscreen recorder now uploads directly to /api/upload/video and returns a URL — nothing large ever
   // crosses the MV3 message boundary (which has a 64 MiB per-message cap). We keep only the URL and size.
-  let video: { url: string; seconds: number; bytes: number; capped?: boolean; frames: { at: number; dataUrl: string }[] } | null = null
+  // Restored from the draft when there is one: the recording is the most expensive artefact in a report and
+  // losing it to a page reload is the worst version of this bug.
+  let video: DraftVideo | null = draft?.video ?? null
 
   // The exact events Send will attach. Physically the clip starts at the checkpoint at/before `from` (a clip
   // must open on a snapshot); `replayTrim` rides alongside so the dashboard plays exactly the chosen stretch.
@@ -791,7 +918,15 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
 
     edStage.innerHTML = ''
     const v = document.createElement('video')
-    v.src = video.dataUrl
+    // The clip is no longer carried as a data URL — the offscreen recorder uploads it and hands back the
+    // collector-relative path, so it has to be resolved against the collector. Left as `video.dataUrl` this
+    // read `undefined` and the trim editor opened on a black rectangle every single time.
+    const cfg = await getConfig()
+    v.src = cfg.collectorUrl.replace(/\/+$/, '') + video.url
+    // The clip is fetched from another origin into the page's own document, so the SITE's media-src can refuse
+    // it. Nothing is lost when that happens — the file is already on the collector — but the tester must be
+    // told why the picture is black instead of being left to guess.
+    v.addEventListener('error', () => setMsg('Видео не открылось для обрезки — страница блокирует внешние медиа. Отправьте как есть: запись уже на сервере.', 'warn'))
     v.preload = 'metadata'
     v.playsInline = true
     v.style.cssText = 'display:block; width:100%; height:100%; object-fit:contain; background:#000;'
@@ -926,6 +1061,21 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       canvas.classList.toggle(t, ann.tool === t)
     }
     paintCursor()
+    autosaveMarkup()
+  }
+
+  // The annotator's onChange also fires for tool and colour changes, which are not work worth persisting.
+  // Compare the markup itself: primitives are few and small, so stringifying them is far cheaper than the
+  // storage write it prevents.
+  let lastPrimSig = ''
+  const primSig = () => JSON.stringify(ann.getPrims())
+  function autosaveMarkup(): void {
+    if (hydrating || closed || draftDead) return
+    persistShotIfChanged() // a crop replaces the backdrop, and its only outside signal is the canvas resizing
+    const sig = primSig()
+    if (sig === lastPrimSig) return
+    lastPrimSig = sig
+    persist()
   }
 
   const openTextInput = (clientX: number, clientY: number) => {
@@ -949,19 +1099,87 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   const cancelTextInput = () => { hideTextInput(); pendingText = null }
 
   const ann = new ImageAnnotator(canvas, { onChange: refresh, onTextRequest: openTextInput })
-  ann.setImage(shot).then(refresh).catch(() => setMsg('Could not load screenshot', 'err'))
+
+  // Put the draft back, or start clean. The RESTORED backdrop wins over the screenshot just taken: it is the
+  // frame the markup was drawn on, and moving that markup onto a different picture would have it point at the
+  // wrong things.
+  const restored = hasContent(draft) ? draft : null
+  void (async () => {
+    const base = restored?.shot?.dataUrl || shot
+    let loaded = true
+    try { await ann.setImage(base) } catch { loaded = false }
+    if (restored?.prims.length) ann.setPrims(restored.prims as Prim[])
+    hydrating = false
+    refresh()
+    lastShotDims = `${canvas.width}x${canvas.height}`
+    lastPrimSig = primSig()
+    if (!loaded) setMsg('Could not load screenshot', 'err')
+    if (restored) {
+      updateClipPanel() // a restored video has to reappear in the "attach the recording?" block
+      showRestoreBar(restored)
+      // Reopened by hand after an Esc: mark the draft live again, so the NEXT reload brings the overlay back
+      // on its own instead of making the tester notice and reopen it a second time.
+      persist({ open: true })
+    } else {
+      // A brand-new capture is worth keeping from its first second, not from the first edit.
+      persist({ shot: { dataUrl: ann.toBaseDataURL(0.85) } })
+    }
+  })()
+
+  // Russian counts: 1 пометка / 2 пометки / 5 пометок. Getting this wrong in the one line that tells a tester
+  // their work is safe reads as sloppiness exactly where trust is being asked for.
+  const plural = (n: number, one: string, few: string, many: string): string => {
+    const m10 = n % 10
+    const m100 = n % 100
+    if (m10 === 1 && m100 !== 11) return one
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return few
+    return many
+  }
+  const restBar = q<HTMLElement>('.rest')
+  const restT = q<HTMLElement>('.restt')
+  function showRestoreBar(d: Draft): void {
+    const bits: string[] = []
+    if (d.prims.length) bits.push(`<b>${d.prims.length}</b> ${plural(d.prims.length, 'пометка', 'пометки', 'пометок')}`)
+    if (d.note.trim()) bits.push('заметка')
+    if (d.video) bits.push(`видео ${fmtT(d.video.seconds)}`)
+    const atts = draftAttachments
+      ? ` · <b>${draftAttachments}</b> ${plural(draftAttachments, 'вложение', 'вложения', 'вложений')} — только в окне ⇗`
+      : ''
+    restT.innerHTML = `↩ Черновик восстановлен — ${bits.join(', ')}${atts}`
+    restBar.classList.add('on')
+  }
+
+  // The only way to throw restored work away deliberately. Autosave is frozen for the duration, so the reset
+  // cannot race the delete and re-create the draft it is removing.
+  async function startOver(): Promise<void> {
+    draftDead = true
+    restBar.classList.remove('on')
+    note.value = ''
+    type = 'bug'
+    severity = 'med'
+    syncTypeSev()
+    video = null
+    attach = true
+    trim = null
+    ann.clearAll()
+    if (openingShot) { try { await ann.setImage(openingShot) } catch {} }
+    refresh()
+    updateClipPanel()
+    await clearDraft(origin)
+    draftDead = false // from here the fresh capture is persisted again — it is work too
+    lastShotDims = ''
+    lastPrimSig = primSig()
+    persistShotIfChanged()
+    setMsg('Черновик удалён — начинаем заново')
+  }
+  q<HTMLElement>('.restx').addEventListener('click', () => { void startOver() })
+
+  // Typing is the one change frequent enough to need the debounce; everything else saves immediately.
+  note.addEventListener('input', () => persist({}, false))
 
   // Tool cursor — a live SVG glyph following the pointer, so the pixel under the cursor tells you which tool
   // is armed. System cursor is hidden (see .canvas { cursor: none }) and this element carries the identity.
   const tcur = q<HTMLElement>('.tcur')
-  const TOOL_CURSORS: Record<Exclude<Tool, 'eraser'>, string> = {
-    rect:    '<svg viewBox="0 0 22 22"><path class="shadow" d="M11 4v14 M4 11h14"/><path class="stroke" d="M11 4v14 M4 11h14"/><rect x="7" y="7" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
-    arrow:   '<svg viewBox="0 0 22 22"><path class="shadow" d="M11 4v14 M4 11h14"/><path class="stroke" d="M11 4v14 M4 11h14"/><path class="fill" d="M15 8 L19 12 L15 16 L15 13 L11 13 L11 11 L15 11 Z"/></svg>',
-    ellipse: '<svg viewBox="0 0 22 22"><path class="shadow" d="M11 4v14 M4 11h14"/><path class="stroke" d="M11 4v14 M4 11h14"/><ellipse cx="11" cy="11" rx="5" ry="3.6" fill="none" stroke="currentColor" stroke-width="1.4"/></svg>',
-    text:    '<svg viewBox="0 0 22 22"><path class="shadow" d="M8 4h6 M8 18h6 M11 4v14"/><path class="stroke" d="M8 4h6 M8 18h6 M11 4v14"/></svg>',
-    crop:    '<svg viewBox="0 0 22 22"><path class="shadow" d="M8 2v13h13 M2 8h13v13"/><path class="stroke" d="M8 2v13h13 M2 8h13v13"/></svg>',
-    draw:    '<svg viewBox="0 0 22 22"><path class="fill" d="M14 3 L19 8 L8 19 L3 19 L3 14 Z"/><path d="M3 19 L6 19" stroke="#38bdf8" stroke-width="1.5"/></svg>',
-  }
   function paintCursor() {
     const t = ann.tool
     tcur.dataset.tool = t
@@ -1036,10 +1254,9 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
     WIDTH_CODES = WIDTH_LAYOUTS[layout]
     // Rewrite tool tooltips so hovering shows the CURRENT layout's key, not a stale one.
     const keyFor = (t: Tool) => Object.entries(TOOL_CODES).find(([, v]) => v === t)?.[0]?.replace(/^Key|^Digit/, '') || '—'
-    const labels: Record<Tool, string> = { rect: 'Рамка', arrow: 'Стрелка', ellipse: 'Овал', draw: 'Карандаш', crop: 'Кадрирование', text: 'Текст', eraser: 'Ластик' }
     root.querySelectorAll('.tb.tool').forEach((el) => {
       const t = (el as HTMLElement).dataset.tool as Tool
-      ;(el as HTMLElement).title = `${labels[t]} · ${keyFor(t)}`
+      ;(el as HTMLElement).title = `${TOOL_LABELS[t]} · ${keyFor(t)}`
     })
   }
   lytBtn.addEventListener('click', (e) => { e.stopPropagation(); lytPop.classList.toggle('on') })
@@ -1059,12 +1276,14 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       type = (el as HTMLElement).dataset.v as ReportType
       root.querySelectorAll('.seg.type button').forEach((b) => b.classList.toggle('on', b === el))
       syncTitle()
+      persist()
     }),
   )
   root.querySelectorAll('.seg.sev button').forEach((el) =>
     el.addEventListener('click', () => {
       severity = (el as HTMLElement).dataset.v as Severity
       root.querySelectorAll('.seg.sev button').forEach((b) => b.classList.toggle('on', b === el))
+      persist()
     }),
   )
   root.querySelectorAll('.tinsz button').forEach((el) => {
@@ -1077,10 +1296,28 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
   undoBtn.addEventListener('click', () => ann.undo())
   redoBtn.addEventListener('click', () => ann.redo())
   clearBtn.addEventListener('click', () => ann.clearAll())
-  q<HTMLElement>('.x').addEventListener('click', close)
-  q<HTMLElement>('.cancel').addEventListener('click', close)
+  q<HTMLElement>('.x').addEventListener('click', close) // ✕ and Esc keep the draft; only Cancel discards it
+  q<HTMLElement>('.cancel').addEventListener('click', () => {
+    const hasWork = !!(note.value.trim() || ann.getPrims().length || video || draftAttachments)
+    const lost = 'Заметка, пометки и видео' + (draftAttachments ? `, а также ${draftAttachments} ${plural(draftAttachments, 'вложение', 'вложения', 'вложений')} из окна редактора,` : '')
+    if (hasWork && !confirm(`Закрыть и удалить черновик? ${lost} будут потеряны.\n\nЧтобы просто свернуть и вернуться позже — Esc.`)) return
+    draftDead = true
+    void clearDraft(origin)
+    close()
+  })
   recBtn.addEventListener('click', () => { void recordRepro() })
   reshotBtn.addEventListener('click', () => { void reshoot() })
+  // The escape hatch for a report that is turning out long: everything moves to a window the site cannot
+  // touch. The background hands the work over (TH_ED_TAKEOVER above) and closes this overlay itself, so the
+  // note, the markup, the recording and the taxonomy travel through the draft with nothing left behind.
+  q<HTMLElement>('.toed').addEventListener('click', () => {
+    if (activeRec) { setMsg('Сначала остановите запись', 'warn'); return }
+    setMsg('Переношу в отдельное окно…')
+    void chrome.runtime
+      .sendMessage({ type: 'TH_EDITOR_OPEN', fresh: false })
+      .then((r) => { if (!r?.ok) setMsg('Окно редактора не открылось: ' + (r?.error || 'нет ответа'), 'err') })
+      .catch((e) => setMsg('Окно редактора не открылось: ' + String(e), 'err'))
+  })
 
   // Retake the screenshot for THIS report. The overlay steps aside so the page can be arranged (scroll, open a
   // menu, hover something), then one click captures a new frame — the note, the recorded video, the type and
@@ -1125,6 +1362,9 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       if (!shot) { setMsg('Не удалось снять кадр — попробуйте ещё раз', 'err'); return }
       const ok = await ann.setImage(shot).then(() => { refresh(); return true }).catch(() => false)
       if (ctx) context = ctx
+      // A re-shoot usually keeps the canvas the same size, so the size-change heuristic would miss it — force
+      // the new frame into the draft explicitly.
+      if (ok) { lastShotDims = ''; persistShotIfChanged() }
       setMsg(ok ? 'Кадр переснят ✓ — заметка и видео сохранены' : 'Кадр не загрузился', ok ? 'ok' : 'err')
     }
     const onShotKey = (e: KeyboardEvent) => {
@@ -1202,9 +1442,12 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       host.style.display = ''
       document.addEventListener('keydown', onKey, true)
 
+      if (shotOk) { lastShotDims = ''; persistShotIfChanged() } // the repro's closing frame belongs in the draft
+
       if (res?.ok && res.url) {
         video = { url: res.url as string, seconds: Number(res.seconds || 0), bytes: Number(res.bytes || 0), capped: !!res.capped, frames: Array.isArray(res.frames) ? res.frames : [] }
         attach = true
+        persist() // a finished recording is the most expensive thing in the report — save it before anything else can go wrong
         updateClipPanel()
         const dur = fmtDur(video.seconds)
         const mb = (video.bytes / 1e6).toFixed(1)
@@ -1233,20 +1476,33 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
       const res = (await chrome.runtime.sendMessage({ type: 'TH_PROJECTS', collectorUrl: cfg.collectorUrl, ingestKey: cfg.ingestKey })) as
         { ok?: boolean; projects?: { id: string; name: string }[]; defaultId?: string }
       if (!res?.ok || !Array.isArray(res.projects) || !res.projects.length) return
-      // Preference order: the project used last (if it still exists) → the ingest key's own → the first one.
+      // Preference order: the restored draft's own choice (the tester already decided where this report goes)
+      // → the project used last (if it still exists) → the ingest key's own → the first one.
+      const fromDraft = projectId && res.projects.some((p) => p.id === projectId) ? projectId : ''
       const remembered = res.projects.some((p) => p.id === cfg.lastProjectId) ? cfg.lastProjectId : ''
-      projectId = remembered || res.defaultId || res.projects[0]!.id
+      projectId = fromDraft || remembered || res.defaultId || res.projects[0]!.id
       psel.innerHTML = res.projects.map((p) => `<option value="${esc(p.id)}"${p.id === projectId ? ' selected' : ''}>${esc(p.name)}</option>`).join('')
     })
     .catch(() => {})
   psel.addEventListener('change', () => {
     projectId = psel.value || null
     if (projectId) void setConfig({ lastProjectId: projectId }) // remembered for the next report
+    persist()
   })
 
   function setMsg(t: string, cls = '') { msg.textContent = t; msg.className = 'msg ' + cls }
 
   sendBtn.addEventListener('click', async () => {
+    // This overlay cannot carry the attachments the editor window collected. Sending from here would file the
+    // ticket without them and then clear the draft — losing them for good. Say it before, not after.
+    if (
+      draftAttachments &&
+      !confirm(
+        `В черновике ${draftAttachments} ${plural(draftAttachments, 'вложение', 'вложения', 'вложений')}. ` +
+        'Они видны только в отдельном окне (⇗ Открыть в окне) и в этот тикет НЕ попадут.\n\n' +
+        'Отправить без них?',
+      )
+    ) return
     const cfg = await getConfig()
 
     // Prepare the recording FIRST, so its real numbers (raw size, compressed size, why it was dropped) can ride
@@ -1343,6 +1599,9 @@ function mount(shot: string, context: ReproBundle | null, getReplay: () => RREve
         },
       })
       if (res?.ok) {
+        // The server has it: this is the one and only moment the draft may be thrown away automatically.
+        draftDead = true
+        void clearDraft(origin)
         // Never let a green "sent" paper over a dropped recording — the tester must know what actually landed.
         if (replayWarn) setMsg(`Отправлено, но ${replayWarn}`, 'warn')
         else if (replayGz || replayPayload) setMsg(`Отправлено ✓ (запись ${fmtDur(sel.trim ? sel.trim.to - sel.trim.from : spanOf(replay))})`, 'ok')

@@ -113,4 +113,43 @@ assert.ok(a.toDataURL(0.9, 'image/png').startsWith('image/png'), 'PNG export opt
 assert.ok(a.toPNG().startsWith('image/png'), 'toPNG helper works')
 assert.ok(changes > 0, 'onChange fired')
 
+// 14. Primitives go out and come back, so a host can persist markup across a page reload and put it back.
+a.setTool('rect')
+a.pointerDown(10, 10); a.pointerMove(80, 80); a.pointerUp()
+a.setTool('arrow')
+a.pointerDown(20, 20); a.pointerMove(90, 60); a.pointerUp()
+const saved = a.getPrims()
+assert.equal(saved.length, 2, 'getPrims returns the current stack')
+
+const live = a.getPrims()
+;(live[0] as { color: string }).color = '#123456'
+assert.notEqual(a.getPrims()[0]!.color, '#123456', 'getPrims hands out a deep copy, not the live objects')
+
+a.clearAll()
+assert.equal(a.getPrims().length, 0, 'cleared')
+a.setPrims(saved)
+assert.equal(a.getPrims().length, 2, 'setPrims restored the stack')
+assert.equal(a.canClear(), true, 'restored primitives count as content')
+assert.equal(a.canUndo(), false, 'restored primitives are the baseline — undo cannot go back past them')
+assert.equal(a.canRedo(), false, 'and there is nothing to redo into')
+
+// Work done after a restore is undoable, and undo stops at the restored baseline.
+a.setTool('draw')
+a.pointerDown(5, 5); a.pointerMove(40, 40); a.pointerUp()
+assert.equal(a.canUndo(), true, 'new stroke is undoable')
+a.undo()
+assert.equal(a.getPrims().length, 2, 'undo stopped at the restored baseline')
+
+// Markup is persisted by serialising it, so it has to survive a JSON round trip unchanged — a primitive
+// holding anything unserialisable would come back subtly different and the restore would lie.
+const throughStorage = JSON.parse(JSON.stringify(a.getPrims()))
+assert.deepEqual(throughStorage, a.getPrims(), 'primitives are plain serialisable data')
+a.setPrims(throughStorage)
+assert.deepEqual(a.getPrims(), throughStorage, 'and load back identically')
+
+// 15. The backdrop can be exported without the markup — the host stores picture and markup separately, so a
+//     crop (which changes the picture) survives a restore instead of silently reverting.
+assert.ok(a.toBaseDataURL().startsWith('image/jpeg'), 'base export is a jpeg data URL by default')
+assert.ok(a.toBaseDataURL(1, 'image/png').startsWith('image/png'), 'base export honours PNG')
+
 console.log('core: all annotator tests passed ✓')

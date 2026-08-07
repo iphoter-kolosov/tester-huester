@@ -199,6 +199,32 @@ export class ImageAnnotator {
     this.commit({ op: 'add', prim: { kind: 'text', color: this.color, p, str: s, size: sz } })
   }
 
+  // Markup in and out, as plain data. The host persists this next to the screenshot so a page reload under the
+  // overlay (a dev server rebuilding, a crash) costs the tester nothing. Deep copies both ways: the caller may
+  // serialise, mutate or hold onto the array without reaching into the live stack.
+  getPrims(): Prim[] { return this.prims.map(deepPrim) }
+
+  // Restored primitives are the new BASELINE: undo/redo start empty, so Ctrl+Z after a restore cannot rewind
+  // into a history that no longer exists (the commands that produced these primitives died with the page).
+  setPrims(prims: Prim[]): void {
+    this.prims = prims.map(deepPrim)
+    this.undoStack = []
+    this.redoStack = []
+    this.current = null
+    this.redraw(); this.onChange()
+  }
+
+  // The backdrop alone, with no primitives painted on it. Lets a host store "the picture" separately from
+  // "the markup" — needed because a crop replaces the picture, and re-restoring the original screenshot would
+  // silently undo it.
+  toBaseDataURL(quality = 0.85, type: 'image/jpeg' | 'image/png' = 'image/jpeg'): string {
+    const off = this.createCanvas()
+    off.width = this.canvas.width
+    off.height = this.canvas.height
+    if (this.img) off.getContext('2d')!.drawImage(this.img, 0, 0, off.width, off.height)
+    return type === 'image/png' ? off.toDataURL('image/png') : off.toDataURL('image/jpeg', quality)
+  }
+
   canUndo(): boolean { return this.undoStack.length > 0 }
   canRedo(): boolean { return this.redoStack.length > 0 }
   canClear(): boolean { return this.prims.length > 0 }

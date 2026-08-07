@@ -11,7 +11,7 @@
     "build": "wxt build",
     "zip": "wxt zip",
     "postinstall": "wxt prepare",
-    "test": "tsx lib/report.test.ts && tsx lib/replay.test.ts"
+    "test": "tsx lib/report.test.ts && tsx lib/replay.test.ts && tsx lib/draft.test.ts"
   },
   "dependencies": {
     "@th/core": "workspace:*",

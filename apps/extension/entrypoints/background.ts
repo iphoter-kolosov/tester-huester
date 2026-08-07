@@ -108,8 +108,139 @@ export default defineBackground(() => {
     }
   }
 
+  // ── the standalone editor window ─────────────────────────────────────────────────────────────────────
+  // A separate browser window is not part of the page, so a dev server reloading the site cannot touch the
+  // report being written in it. That is the whole architectural point, and everything below exists to keep it
+  // true: the window owns the work, the tab is only a source of pictures and video.
+  const EDITOR_PAGE = 'editor.html'
+  const SEED_KEY = 'th.editorSeed' // one freshly captured frame, handed to a window that may not exist yet
+  const WIN_KEY = 'th.editorWin' // remembered size/position (and the live window id) between opens
+  const DEFAULT_W = 1200
+  const DEFAULT_H = 840
+  const MIN_W = 900
+  const MIN_H = 560
+
+  type WinGeom = { id?: number; left?: number; top?: number; width: number; height: number }
+
+  async function readGeom(): Promise<WinGeom | null> {
+    const got = await chrome.storage.local.get(WIN_KEY)
+    const g = got[WIN_KEY] as WinGeom | undefined
+    return g && Number.isFinite(g.width) && Number.isFinite(g.height) ? g : null
+  }
+
+  // The window id lives in the same record so a restarted service worker still finds the window the tester
+  // has open instead of stacking a second one on top of it.
+  async function liveEditorWindow(): Promise<number | null> {
+    const g = await readGeom()
+    if (g?.id == null) return null
+    try {
+      await chrome.windows.get(g.id)
+      return g.id
+    } catch {
+      return null
+    }
+  }
+
+  async function rememberWindow(id: number | null, bounds?: chrome.windows.Window): Promise<void> {
+    const g = (await readGeom()) ?? { width: DEFAULT_W, height: DEFAULT_H }
+    const next: WinGeom = {
+      ...g,
+      id: id ?? undefined,
+      left: bounds?.left ?? g.left,
+      top: bounds?.top ?? g.top,
+      width: Math.max(MIN_W, bounds?.width ?? g.width),
+      height: Math.max(MIN_H, bounds?.height ?? g.height),
+    }
+    await chrome.storage.local.set({ [WIN_KEY]: next })
+  }
+
+  chrome.windows.onBoundsChanged.addListener((win) => {
+    void (async () => {
+      const id = await liveEditorWindow()
+      if (id === win.id) await rememberWindow(id, win)
+    })()
+  })
+  chrome.windows.onRemoved.addListener((id) => {
+    void (async () => {
+      const g = await readGeom()
+      if (g?.id === id) await chrome.storage.local.set({ [WIN_KEY]: { ...g, id: undefined } })
+    })()
+  })
+
+  // Ask the page's overlay (if one is on screen) to write everything it holds into the draft and step aside.
+  // Two writers on one draft key is precisely the data loss this stage removes, so this is awaited before the
+  // window is allowed to read it.
+  async function handOverFromOverlay(tabId: number): Promise<void> {
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: 'TH_ED_TAKEOVER' }, { frameId: 0 })
+    } catch {
+      // No content script (a restricted page, or a tab older than the extension) — nothing to hand over.
+    }
+  }
+
+  async function openEditor(tabId?: number, fresh = true): Promise<void> {
+    let tab: chrome.tabs.Tab | undefined
+    if (tabId == null) [tab] = await chrome.tabs.query({ active: true, currentWindow: true })
+    else tab = await chrome.tabs.get(tabId).catch(() => undefined)
+    if (!tab?.id) return
+
+    const pageUrl = tab.url ?? ''
+    let origin = ''
+    try {
+      origin = new URL(pageUrl).origin
+    } catch {
+      console.warn('[th] this page has no usable origin, the editor cannot keep a draft for it:', pageUrl)
+      return
+    }
+
+    await handOverFromOverlay(tab.id)
+
+    let shot = ''
+    if (fresh) {
+      // captureVisibleTab photographs whatever is VISIBLE in the window — a tab sitting in the background
+      // would hand back a picture of a different page, which is worse than no picture.
+      if (tab.active) {
+        shot = await chrome.tabs.captureVisibleTab(tab.windowId, { format: 'png' }).catch((e) => {
+          console.warn('[th] screenshot failed (restricted page?):', e)
+          return ''
+        })
+      } else {
+        console.warn('[th] the target tab is not visible; the editor opens without a fresh frame')
+      }
+    }
+
+    await chrome.storage.local.set({ [SEED_KEY]: { shot, tabId: tab.id, origin, pageUrl, at: Date.now() } })
+
+    const existing = await liveEditorWindow()
+    if (existing != null) {
+      await chrome.windows.update(existing, { focused: true, drawAttention: true })
+      // The window is already loaded, so it will not run its startup seed read again — poke it.
+      chrome.runtime.sendMessage({ type: 'TH_ED_SEED' }).catch(() => {})
+      return
+    }
+
+    const url = `${EDITOR_PAGE}?tab=${tab.id}&origin=${encodeURIComponent(origin)}&url=${encodeURIComponent(pageUrl)}`
+    const g = await readGeom()
+    // No remembered geometry yet: size the window from the browser window it was launched from, so it lands
+    // on the same screen and inside it on a laptop as well as on a 4K monitor.
+    const host = await chrome.windows.get(tab.windowId).catch(() => undefined)
+    const width = Math.max(MIN_W, g?.width ?? Math.min(DEFAULT_W, (host?.width ?? DEFAULT_W) - 80))
+    const height = Math.max(MIN_H, g?.height ?? Math.min(DEFAULT_H, (host?.height ?? DEFAULT_H) - 60))
+    const created = await chrome.windows.create({
+      url: chrome.runtime.getURL(url),
+      type: 'popup',
+      focused: true,
+      width,
+      height,
+      left: g?.left ?? (host?.left ?? 0) + 40,
+      top: g?.top ?? (host?.top ?? 0) + 40,
+    })
+    if (created?.id != null) await rememberWindow(created.id, created)
+  }
+
   chrome.commands.onCommand.addListener((cmd) => {
     if (cmd === 'capture') capture()
+    else if (cmd === 'open_editor') void openEditor()
   })
 
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -120,10 +251,51 @@ export default defineBackground(() => {
     if (msg?.type === 'TH_SHOT') {
       // Screenshot for the explicit "record repro" flow: the content script asks for a fresh frame when the
       // tester presses Stop, then reopens the overlay with it + the recorded clip.
+      // The editor WINDOW has no sender.tab, so it names the tab explicitly — and a tab that is not the
+      // visible one is refused by name rather than photographed as whatever is in front of it.
+      if (msg.tabId != null) {
+        void (async () => {
+          try {
+            const t = await chrome.tabs.get(msg.tabId as number)
+            if (!t.active) { sendResponse({ ok: false, error: 'вкладка не на переднем плане' }); return }
+            const shot = await chrome.tabs.captureVisibleTab(t.windowId, { format: 'png' })
+            sendResponse({ ok: true, shot })
+          } catch (e) {
+            sendResponse({ ok: false, error: String((e as Error)?.message || e) })
+          }
+        })()
+        return true
+      }
       const winId = sender.tab?.windowId
       const shoot = winId != null ? chrome.tabs.captureVisibleTab(winId, { format: 'png' }) : chrome.tabs.captureVisibleTab({ format: 'png' })
       shoot.then((shot) => sendResponse({ ok: true, shot })).catch((e) => sendResponse({ ok: false, error: String(e) }))
       return true
+    }
+    if (msg?.type === 'TH_CTX') {
+      // The editor window cannot reach the page's MAIN-world probe itself; the content script owns that
+      // bridge. Frame 0 only — every iframe runs the same script and would answer with its own bundle.
+      const tabId = msg.tabId ?? sender.tab?.id
+      if (tabId == null) { sendResponse({ ok: false, error: 'no tab' }); return true }
+      chrome.tabs
+        .sendMessage(tabId, { type: 'TH_CTX' }, { frameId: 0 })
+        .then((r) => sendResponse(r ?? { ok: false, error: 'no answer' }))
+        .catch((e) => sendResponse({ ok: false, error: String((e as Error)?.message || e) }))
+      return true
+    }
+    if (msg?.type === 'TH_EDITOR_OPEN') {
+      // From the overlay's "⇗ Открыть в окне" (fresh: false — the draft already holds the frame) or the popup.
+      const tabId = msg.tabId ?? sender.tab?.id
+      openEditor(tabId, msg.fresh !== false)
+        .then(() => sendResponse({ ok: true }))
+        .catch((e) => sendResponse({ ok: false, error: String((e as Error)?.message || e) }))
+      return true
+    }
+    if (msg?.type === 'TH_EDITOR_CLOSE') {
+      void (async () => {
+        const id = await liveEditorWindow()
+        if (id != null) await chrome.windows.remove(id).catch(() => {})
+      })()
+      return
     }
     if (msg?.type === 'TH_SEND') {
       fetch(`${msg.collectorUrl}/api/ingest`, {
@@ -137,7 +309,9 @@ export default defineBackground(() => {
       return true // keep the message channel open for the async response
     }
     if (msg?.type === 'TH_VIDEO_START') {
-      const tabId = sender.tab?.id
+      // sender.tab only exists for a content script. The editor window is an extension page, so it names the
+      // tab to record explicitly — without this it would record nothing (or, worse, itself).
+      const tabId = msg.tabId ?? sender.tab?.id
       if (tabId == null) { sendResponse({ ok: false, error: 'no tab' }); return true }
       startVideo(tabId, msg.maxSeconds, msg.collectorUrl).then(sendResponse)
       return true

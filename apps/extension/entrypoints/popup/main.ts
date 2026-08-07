@@ -24,3 +24,10 @@ document.getElementById('capture')!.addEventListener('click', () => {
   chrome.runtime.sendMessage({ type: 'TH_CAPTURE' })
   window.close() // let the tab (and its overlay) take over
 })
+
+// The standalone editor window: captures the active tab and opens the report in a window the site under test
+// cannot disturb. The popup closes immediately — it would be dismissed by the new window's focus anyway.
+document.getElementById('editor')!.addEventListener('click', () => {
+  chrome.runtime.sendMessage({ type: 'TH_EDITOR_OPEN', fresh: true })
+  window.close()
+})

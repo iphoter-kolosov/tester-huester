@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>tester-huester — редактор тикета</title>
+    <style>
+      /* Same tokens and feel as the in-page overlay (entrypoints/content.ts): this is the SAME product, moved
+         into a window that the site under test cannot tear down. */
+      :root, * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body { margin: 0; background: #0b0f1a; color: #e6edf7; font: 14px system-ui, sans-serif; overflow: hidden; }
+
+      .wrap { height: 100vh; display: flex; flex-direction: column; gap: 8px; padding: 10px; }
+      .head { display: flex; align-items: center; gap: 10px; flex: 0 0 auto; min-width: 0; }
+      .title { font-weight: 800; white-space: nowrap; }
+      .target { font-size: 11.5px; font-weight: 700; color: #8ea0bd; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+      .recst { font-size: 11.5px; font-weight: 800; white-space: nowrap; margin-left: auto; }
+      .recst.ok { color: #34d399; }
+      .recst.warn { color: #fbbf24; }
+      .ctxhint { font-size: 11.5px; font-weight: 700; color: #8ea0bd; white-space: nowrap; }
+      .ctxhint b { color: #38bdf8; }
+
+      /* Restored-draft bar — amber, same wording rules as the overlay: "here is something you left behind". */
+      .rest { display: none; align-items: center; gap: 10px; flex: 0 0 auto; padding: 7px 12px; border: 1px solid #a16207; background: rgba(161,98,7,.16); border-radius: 10px; font-size: 12.5px; font-weight: 700; color: #fcd34d; }
+      .rest.on { display: flex; }
+      .rest b { color: #fff; }
+
+      /* Two columns. The rail keeps its width and scrolls internally when the window is short; the canvas is
+         the only thing that flexes, so nothing is ever pushed out of reach at 1366x768 or 1024x600. */
+      .body { display: flex; gap: 10px; flex: 1 1 auto; min-height: 0; }
+      .rail { flex: 0 0 264px; width: 264px; display: flex; flex-direction: column; gap: 7px; min-height: 0; }
+      .railscroll { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 9px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; padding-right: 3px; }
+      .railscroll::-webkit-scrollbar { width: 6px; }
+      .railscroll::-webkit-scrollbar-thumb { background: #2b3a55; border-radius: 3px; }
+      .railfoot { flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; padding-top: 7px; border-top: 1px solid #223049; }
+      .main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 8px; min-height: 0; }
+
+      .grp { display: flex; flex-direction: column; gap: 5px; }
+      .grpttl { display: flex; align-items: center; gap: 6px; font-size: 9.5px; font-weight: 800; color: #8ea0bd; text-transform: uppercase; letter-spacing: .05em; }
+      .grpkey { color: #64748b; font-weight: 700; font-size: 9px; text-transform: none; letter-spacing: 0; }
+      .cnt { margin-left: auto; color: #e6edf7; font-weight: 800; text-transform: none; letter-spacing: 0; font-size: 10.5px; }
+      .cnt.full { color: #fbbf24; }
+
+      /* ── the shot strip: the main screenshot plus up to ten attachments ── */
+      .strip { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+      .sh { position: relative; border: 1px solid #223049; background: #0f1626; border-radius: 9px; padding: 0; overflow: hidden; cursor: pointer; aspect-ratio: 16 / 10; }
+      .sh:hover { border-color: #38bdf8; }
+      .sh.on { border-color: #0a84ff; box-shadow: 0 0 0 1px #0a84ff inset; }
+      .sh img { display: block; width: 100%; height: 100%; object-fit: cover; }
+      .sh .no { display: flex; align-items: center; justify-content: center; width: 100%; height: 100%; color: #64748b; font-size: 10.5px; font-weight: 700; }
+      .sh .n { position: absolute; left: 4px; top: 4px; padding: 1px 6px; border-radius: 6px; background: rgba(3,7,18,.82); color: #e6edf7; font-size: 10px; font-weight: 800; }
+      .sh .marks { position: absolute; right: 4px; top: 4px; padding: 1px 6px; border-radius: 6px; background: rgba(10,132,255,.85); color: #fff; font-size: 10px; font-weight: 800; }
+      .sh .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 3px 5px; background: rgba(3,7,18,.82); color: #cbd5e1; font-size: 9.5px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+      .sh .cap.empty { color: #f59e0b; }
+      .shops { display: flex; gap: 3px; }
+      .shops button { flex: 1; height: 20px; border: 1px solid #223049; background: #0f1626; color: #8ea0bd; border-radius: 5px; font-size: 10px; font-weight: 800; cursor: pointer; padding: 0; }
+      .shops button:hover:not(:disabled) { color: #e6edf7; border-color: #38bdf8; }
+      .shops button:disabled { opacity: .3; cursor: default; }
+      .shops button.del:hover { border-color: #ef4444; color: #fca5a5; }
+      .shitem { display: flex; flex-direction: column; gap: 3px; }
+
+      .rowx { display: flex; gap: 5px; flex-wrap: wrap; }
+      .tools { display: grid; grid-template-columns: repeat(5, 1fr); gap: 4px; }
+      .tools .tb { height: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
+      .tb { height: 30px; padding: 0 10px; border: 1px solid #223049; background: #0f1626; color: #e6edf7; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+      .tb.on { border-color: #0a84ff; background: #0a84ff; color: #fff; }
+      .tb:disabled { opacity: .4; cursor: default; }
+      .two { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+
+      /* colour + width scales, identical to the overlay's */
+      .cbar { position: relative; height: 22px; border-radius: 6px; cursor: pointer; user-select: none; border: 1px solid #223049;
+        background: linear-gradient(to right,
+          #ff3b30 0%, #ff3b30 8.33%, #ff9500 8.33%, #ff9500 16.66%, #ffcc00 16.66%, #ffcc00 25%,
+          #34c759 25%, #34c759 33.33%, #00c7be 33.33%, #00c7be 41.66%, #0a84ff 41.66%, #0a84ff 50%,
+          #5856d6 50%, #5856d6 58.33%, #af52de 58.33%, #af52de 66.66%, #ff2d55 66.66%, #ff2d55 75%,
+          #ffffff 75%, #ffffff 83.33%, #8e8e93 83.33%, #8e8e93 91.66%, #0c1526 91.66%, #0c1526 100%); }
+      .cknob { position: absolute; top: 50%; width: 18px; height: 18px; margin: -9px 0 0 -9px; border-radius: 50%; background: currentColor; border: 2px solid #fff; box-shadow: 0 0 0 1px #0f1626, 0 2px 6px rgba(0,0,0,.6); pointer-events: none; transition: left .06s linear; }
+      .wbar { position: relative; height: 28px; border-radius: 6px; cursor: pointer; user-select: none; background: #0f1626; border: 1px solid #223049; padding: 0 12px; display: flex; align-items: center; }
+      .wwedge { flex: 1; height: 18px; clip-path: polygon(0 45%, 100% 0, 100% 100%, 0 55%); background-color: #e6edf7; opacity: .85; border-radius: 3px; }
+      .wknob { position: absolute; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: #0a84ff; border: 2px solid #fff; box-shadow: 0 0 0 1px #0f1626, 0 2px 6px rgba(0,0,0,.6); pointer-events: none; transition: left .06s linear; }
+      .wtags { display: flex; justify-content: space-between; padding: 0 2px; font-size: 9.5px; font-weight: 700; color: #8ea0bd; }
+
+      .seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid #223049; border-radius: 8px; overflow: hidden; }
+      .seg.sev { grid-template-columns: repeat(4, 1fr); }
+      .seg button { height: 28px; padding: 0 4px; border: 0; border-right: 1px solid #223049; border-bottom: 1px solid #223049; background: #0f1626; color: #e6edf7; font-size: 11.5px; font-weight: 700; cursor: pointer; }
+      .seg button.on { background: #0a84ff; color: #fff; }
+      .seg.sev button.on[data-v="low"] { background: #3f6212; }
+      .seg.sev button.on[data-v="med"] { background: #a16207; }
+      .seg.sev button.on[data-v="high"] { background: #c2410c; }
+      .seg.sev button.on[data-v="crit"] { background: #b91c1c; }
+      .psel { width: 100%; height: 30px; padding: 0 9px; border: 1px solid #223049; background: #0f1626; color: #e6edf7; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+      .psel:hover { border-color: #38bdf8; }
+
+      /* video block */
+      .vid { display: flex; flex-direction: column; gap: 6px; padding: 8px 9px; border: 1px solid #223049; border-radius: 10px; background: #0f1626; }
+      .vidst { font-size: 11.5px; font-weight: 700; color: #8ea0bd; line-height: 1.35; }
+      .vidst.ok { color: #34d399; }
+      .vidst.live { color: #fca5a5; }
+
+      .btn { height: 36px; padding: 0 16px; border: 0; border-radius: 10px; background: #0a84ff; color: #fff; font-weight: 800; font-size: 13px; cursor: pointer; width: 100%; }
+      .btn:disabled { opacity: .5; cursor: default; }
+      .ghost { background: transparent; border: 1px solid #223049; color: #e6edf7; }
+      .ghost:hover:not(:disabled) { border-color: #38bdf8; }
+      .ghost.danger:hover:not(:disabled) { border-color: #ef4444; color: #fca5a5; }
+      .msg { color: #8ea0bd; font-size: 12px; line-height: 1.3; min-height: 15px; }
+      .msg.err { color: #ff6b6b; }
+      .msg.warn { color: #fbbf24; }
+      .msg.ok { color: #34d399; }
+      .msg a { color: #38bdf8; }
+      .khint { font-size: 10.5px; font-weight: 700; color: #64748b; line-height: 1.35; }
+      .khint b { color: #8ea0bd; }
+
+      /* canvas stage — flexes, never scrolls */
+      .cvwrap { flex: 1 1 auto; min-height: 90px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+      .canvas { display: block; max-width: 100%; max-height: 100%; border-radius: 10px; border: 1px solid #223049; background: #0f1626; touch-action: none; cursor: none; }
+      .canvas[hidden] { display: none; }
+      /* Lives INSIDE .cvwrap so the stage keeps its single flexing child whether or not there is a picture. */
+      .noimg { display: none; width: 100%; height: 100%; align-items: center; justify-content: center; border: 1px dashed #2b3a55; border-radius: 10px; color: #64748b; font-weight: 700; text-align: center; padding: 20px; }
+      .noimg.on { display: flex; }
+      .noimg b { color: #8ea0bd; display: block; margin-bottom: 4px; }
+
+      .capwrap { display: none; flex: 0 0 auto; align-items: center; gap: 8px; }
+      .capwrap.on { display: flex; }
+      .capwrap label { font-size: 10px; font-weight: 800; color: #8ea0bd; text-transform: uppercase; letter-spacing: .05em; white-space: nowrap; }
+      .capin { flex: 1 1 auto; min-width: 0; height: 32px; padding: 0 11px; background: #0f1626; border: 1px solid #223049; border-radius: 9px; color: #e6edf7; font: inherit; outline: none; }
+      .capin:focus { border-color: #38bdf8; }
+      .note { width: 100%; flex: 0 0 22%; min-height: 62px; padding: 9px 12px; background: #0f1626; border: 1px solid #223049; border-radius: 10px; color: #e6edf7; font: inherit; line-height: 1.45; resize: none; outline: none; }
+      .note:focus { border-color: #38bdf8; }
+
+      /* live tool glyph following the pointer (the system cursor is hidden over the canvas) */
+      .tcur { position: fixed; z-index: 40; pointer-events: none; display: none; width: 22px; height: 22px; color: #e6edf7; filter: drop-shadow(0 1px 2px rgba(0,0,0,.9)); }
+      .tcur.on { display: block; }
+      .tcur svg { display: block; width: 22px; height: 22px; }
+      .tcur svg .fill { fill: currentColor; stroke: #0b1220; stroke-width: 1.2; stroke-linejoin: round; }
+      .tcur svg .stroke { fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; paint-order: stroke; }
+      .tcur svg .shadow { fill: none; stroke: #0b1220; stroke-width: 4; stroke-linecap: round; stroke-linejoin: round; }
+      .tcur[data-tool="rect"], .tcur[data-tool="arrow"], .tcur[data-tool="ellipse"], .tcur[data-tool="text"] { transform: translate(-11px, -11px); }
+      .tcur[data-tool="crop"] { transform: translate(0, 0); }
+      .tcur[data-tool="draw"] { transform: translate(-1px, -20px); }
+      .tcur[data-tool="eraser"] { display: none !important; }
+
+      /* text tool popover */
+      .tin { position: fixed; z-index: 42; display: none; flex-direction: column; gap: 6px; padding: 8px; background: #0f1626; border: 1px solid #0a84ff; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.6); }
+      .tin input { width: 260px; height: 32px; padding: 0 10px; background: #131a2b; border: 1px solid #223049; border-radius: 7px; outline: none; color: #e6edf7; font: 800 15px system-ui, sans-serif; }
+      .tinrow { display: flex; align-items: center; gap: 6px; }
+      .tinsz { display: inline-flex; gap: 4px; }
+      .tinsz button { width: 26px; height: 24px; border: 1px solid #223049; background: #131a2b; color: #e6edf7; border-radius: 6px; font-weight: 800; font-size: 12px; cursor: pointer; }
+      .tinsz button.on { border-color: #0a84ff; background: #0a84ff; color: #fff; }
+      .tinhint { margin-left: auto; font-size: 11px; color: #8ea0bd; font-weight: 700; white-space: nowrap; }
+      .tinhint b { color: #38bdf8; }
+      .tmark { position: fixed; z-index: 41; display: none; width: 12px; height: 12px; margin: -6px 0 0 -6px; pointer-events: none; border: 2px solid #0a84ff; border-radius: 50%; box-shadow: 0 0 0 2px rgba(3,7,18,.6); }
+
+      /* drag-and-drop target covering the whole window */
+      .drop { position: fixed; inset: 0; z-index: 50; display: none; align-items: center; justify-content: center; background: rgba(10,132,255,.14); backdrop-filter: blur(2px); border: 3px dashed #0a84ff; font-size: 18px; font-weight: 800; color: #e6edf7; }
+      .drop.on { display: flex; }
+
+      /* Short windows: tighten, never clip. */
+      @media (max-height: 800px) {
+        .note { flex-basis: 18%; min-height: 52px; }
+        .strip { gap: 5px; }
+      }
+      @media (max-height: 660px) {
+        .wrap { gap: 6px; padding: 8px; }
+        .khint { display: none; }
+        .rail { flex-basis: 236px; width: 236px; }
+        .note { flex-basis: 16%; min-height: 46px; }
+        .btn { height: 32px; }
+      }
+      @media (max-width: 1120px) {
+        .rail { flex-basis: 226px; width: 226px; }
+        .target { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="rest"><span class="restt"></span></div>
+      <div class="head">
+        <span class="title">🐞 Редактор тикета</span>
+        <span class="target"></span>
+        <span class="ctxhint"></span>
+        <span class="recst"></span>
+      </div>
+      <div class="body">
+        <aside class="rail">
+          <div class="railscroll">
+            <div class="grp">
+              <span class="grpttl">Кадры <span class="cnt"></span></span>
+              <div class="strip"></div>
+              <div class="two">
+                <button class="tb" data-add="file">📎 Файлы</button>
+                <button class="tb" data-add="shot">📷 Снять кадр</button>
+              </div>
+              <span class="khint"><b>Ctrl+V</b> — вставить картинку из буфера · перетащите файлы в окно</span>
+            </div>
+
+            <div class="grp">
+              <span class="grpttl">Инструмент <span class="grpkey">R A O P C T E</span></span>
+              <span class="rowx tools"></span>
+            </div>
+
+            <div class="grp">
+              <span class="grpttl">Цвет <span class="grpkey">(F — след.)</span></span>
+              <div class="cbar" role="slider" aria-label="Цвет"><span class="cknob"></span></div>
+            </div>
+
+            <div class="grp">
+              <span class="grpttl">Размер <span class="grpkey">(1 / 2 / 3)</span></span>
+              <div class="wbar" role="slider" aria-label="Толщина"><span class="wwedge"></span><span class="wknob"></span></div>
+              <div class="wtags"><span>тонко</span><span>средне</span><span>толсто</span></div>
+            </div>
+
+            <div class="grp">
+              <span class="grpttl">Тип</span>
+              <div class="seg type"></div>
+            </div>
+
+            <div class="grp">
+              <span class="grpttl">Важность</span>
+              <div class="seg sev"></div>
+            </div>
+
+            <div class="grp">
+              <span class="grpttl">Проект</span>
+              <select class="psel"><option value="">по умолчанию</option></select>
+            </div>
+
+            <div class="grp">
+              <span class="grpttl">Видео</span>
+              <div class="vid">
+                <span class="vidst">записи нет</span>
+                <button class="tb rec">⏺ Записать репро</button>
+                <button class="tb vdrop" hidden>✕ Убрать видео</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="railfoot">
+            <span class="msg"></span>
+            <button class="btn send">💾 Сохранить и закрыть</button>
+            <button class="btn ghost danger discard">🗑 Удалить черновик</button>
+            <span class="khint"><b>Ctrl+Enter</b> — отправить. Окно можно закрыть в любой момент — черновик сохранится и вернётся сюда же.</span>
+          </div>
+        </aside>
+
+        <main class="main">
+          <div class="cvwrap">
+            <canvas class="canvas"></canvas>
+            <div class="noimg"><span><b>Кадра нет</b>Вставьте картинку (Ctrl+V), перетащите файл или нажмите «📷 Снять кадр»</span></div>
+          </div>
+          <div class="capwrap"><label>Подпись</label><input class="capin" type="text" placeholder="Опишите, что здесь" /></div>
+          <textarea class="note" placeholder="Что не так? Опишите проблему…"></textarea>
+        </main>
+      </div>
+    </div>
+
+    <div class="tmark"></div>
+    <div class="tcur" data-tool="rect"></div>
+    <div class="tin">
+      <input type="text" placeholder="Текст…" />
+      <div class="tinrow">
+        <span class="tinsz">
+          <button data-tsz="thin">S</button>
+          <button data-tsz="med" class="on">M</button>
+          <button data-tsz="thick">L</button>
+        </span>
+        <span class="tinhint"><b>&#8629;</b> поставить &#183; <b>Esc</b> отмена</span>
+      </div>
+    </div>
+    <div class="drop">Отпустите — картинки станут вложениями</div>
+    <input class="filein" type="file" accept="image/*" multiple hidden />
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

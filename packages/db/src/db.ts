@@ -87,6 +87,10 @@ function db(): DatabaseSync {
   if (!columnExists(c, 'reports', 'video_trim')) c.exec('ALTER TABLE reports ADD COLUMN video_trim text')
   // Stills sampled from the recording, as [{at, url}] — the agent-readable form of the video.
   if (!columnExists(c, 'reports', 'video_frames')) c.exec('ALTER TABLE reports ADD COLUMN video_frames text')
+  // Up to MAX_ATTACHMENTS extra images, each with its own baked-in markup and its own caption — "ten tickets
+  // in one". A JSON column rather than a child table: the set is always read whole with the report, never
+  // queried or joined on individually, and its order is part of the meaning (the reporter's numbering).
+  if (!columnExists(c, 'reports', 'attachments')) c.exec('ALTER TABLE reports ADD COLUMN attachments text')
   // Per-project read key: read-only, single-project scope for an agent (REST/MCP) — no dashboard cookie, no
   // write-capable ingest key. Added nullable, then backfilled for pre-existing projects.
   if (!columnExists(c, 'projects', 'read_key')) c.exec('ALTER TABLE projects ADD COLUMN read_key text')
@@ -124,12 +128,43 @@ export type Project = { id: string; name: string; ingestKey: string; readKey: st
 // `type` classifies the note; `severity` is an optional triage weight (null on legacy rows).
 export type ReportType = 'feature' | 'bug' | 'fix' | 'text'
 export type Severity = 'low' | 'med' | 'high' | 'crit'
+
+// One attached image is a first-class unit of evidence: the picture, the markup already baked into it, and the
+// caption that says what to look at. Order is the reporter's numbering and is preserved as stored.
+export type Attachment = { id: string; url: string; caption: string; at: number }
+// Hard ceiling, enforced here so no caller can exceed it whatever the API layer believes.
+export const MAX_ATTACHMENTS = 10
+const CAPTION_MAX = 2000
+
 export type Report = {
   id: string; shortId: string; projectId: string; note: string; screenshotUrl: string | null; pageUrl: string | null
   viewport: string | null; userAgent: string | null; reporter: string | null; status: string; createdAt: number
   context: unknown | null; replayUrl: string | null; videoUrl: string | null; videoSeconds: number | null
   videoTrim: { from: number; to: number } | null; videoFrames: { at: number; url: string }[] | null
+  // Always an array — legacy rows (column added later, or written before it existed) read back as [] so no
+  // consumer has to null-check before iterating.
+  attachments: Attachment[]
   type: ReportType; severity: Severity | null; archived: boolean
+}
+
+// Accept only well-formed entries and cap the list. Used on both the write and the read path: a row written by
+// an older build, or hand-edited, must not be able to crash a page that renders it.
+export function normalizeAttachments(v: unknown): Attachment[] {
+  if (!Array.isArray(v)) return []
+  const out: Attachment[] = []
+  for (const raw of v) {
+    if (out.length >= MAX_ATTACHMENTS) break
+    if (!raw || typeof raw !== 'object') continue
+    const a = raw as Record<string, unknown>
+    if (typeof a.url !== 'string' || !a.url) continue
+    out.push({
+      id: typeof a.id === 'string' && a.id ? a.id : crypto.randomUUID(),
+      url: a.url,
+      caption: typeof a.caption === 'string' ? a.caption.slice(0, CAPTION_MAX) : '',
+      at: typeof a.at === 'number' && Number.isFinite(a.at) ? a.at : Date.now(),
+    })
+  }
+  return out
 }
 
 // The human-facing handle for a ticket: short enough to say and paste, long enough to stay unique.
@@ -161,6 +196,7 @@ const toReport = (r: any): Report => ({
   videoUrl: r.video_url ?? null, videoSeconds: r.video_seconds ?? null,
   videoTrim: (parseJson(r.video_trim) as { from: number; to: number } | null) ?? null,
   videoFrames: (parseJson(r.video_frames) as { at: number; url: string }[] | null) ?? null,
+  attachments: normalizeAttachments(parseJson(r.attachments)),
   type: (r.type ?? 'bug') as ReportType, severity: (r.severity ?? null) as Severity | null,
   archived: !!r.archived,
 })
@@ -180,6 +216,7 @@ export type NewReport = {
   userAgent?: string | null; reporter?: string | null; context?: unknown | null; replayUrl?: string | null
   videoUrl?: string | null; videoSeconds?: number | null; videoTrim?: { from: number; to: number } | null
   videoFrames?: { at: number; url: string }[] | null
+  attachments?: Attachment[] | null
   type?: ReportType; severity?: Severity | null
 }
 
@@ -232,10 +269,11 @@ export const repo = {
   },
   createReport(x: NewReport): Report {
     const id = crypto.randomUUID()
+    const attachments = normalizeAttachments(x.attachments)
     db().prepare(
-      `INSERT INTO reports (id, project_id, note, screenshot_url, page_url, viewport, user_agent, reporter, status, created_at, context, replay_url, video_url, video_seconds, video_trim, video_frames, type, severity)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    ).run(id, x.projectId, x.note, x.screenshotUrl ?? null, x.pageUrl ?? null, x.viewport ?? null, x.userAgent ?? null, x.reporter ?? null, 'new', Date.now(), x.context != null ? JSON.stringify(x.context) : null, x.replayUrl ?? null, x.videoUrl ?? null, x.videoSeconds ?? null, x.videoTrim ? JSON.stringify(x.videoTrim) : null, x.videoFrames?.length ? JSON.stringify(x.videoFrames) : null, x.type ?? 'bug', x.severity ?? null)
+      `INSERT INTO reports (id, project_id, note, screenshot_url, page_url, viewport, user_agent, reporter, status, created_at, context, replay_url, video_url, video_seconds, video_trim, video_frames, attachments, type, severity)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(id, x.projectId, x.note, x.screenshotUrl ?? null, x.pageUrl ?? null, x.viewport ?? null, x.userAgent ?? null, x.reporter ?? null, 'new', Date.now(), x.context != null ? JSON.stringify(x.context) : null, x.replayUrl ?? null, x.videoUrl ?? null, x.videoSeconds ?? null, x.videoTrim ? JSON.stringify(x.videoTrim) : null, x.videoFrames?.length ? JSON.stringify(x.videoFrames) : null, attachments.length ? JSON.stringify(attachments) : null, x.type ?? 'bug', x.severity ?? null)
     return this.getReport(id)!
   },
   // Backwards compatible: the old call site passed only `status`. New filters (projectId, type) are additive
@@ -337,12 +375,19 @@ export const repo = {
   },
 
   // Edit a report's properties after creation. Only the supplied fields are written.
-  updateReport(id: string, fields: { note?: string; type?: ReportType; severity?: Severity | null }): boolean {
+  // `attachments` replaces the whole list (it is one ordered value, not a bag to append to) and is capped and
+  // re-validated here; an empty list clears the column.
+  updateReport(id: string, fields: { note?: string; type?: ReportType; severity?: Severity | null; attachments?: Attachment[] }): boolean {
     const sets: string[] = []
     const args: (string | null)[] = []
     if (fields.note !== undefined) { sets.push('note = ?'); args.push(fields.note) }
     if (fields.type !== undefined) { sets.push('type = ?'); args.push(fields.type) }
     if (fields.severity !== undefined) { sets.push('severity = ?'); args.push(fields.severity) }
+    if (fields.attachments !== undefined) {
+      const list = normalizeAttachments(fields.attachments)
+      sets.push('attachments = ?')
+      args.push(list.length ? JSON.stringify(list) : null)
+    }
     if (!sets.length) return false
     args.push(id)
     return db().prepare(`UPDATE reports SET ${sets.join(', ')} WHERE id = ?`).run(...args).changes > 0

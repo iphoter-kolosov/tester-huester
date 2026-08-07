@@ -1,5 +1,6 @@
+import crypto from 'node:crypto'
 import { NextResponse } from 'next/server'
-import { repo, type ReportType, type Severity } from '@th/db'
+import { repo, MAX_ATTACHMENTS, type Attachment, type ReportType, type Severity } from '@th/db'
 import { storage } from '@/lib/storage'
 
 export const runtime = 'nodejs'
@@ -20,6 +21,44 @@ const CORS = {
   'Access-Control-Allow-Headers': 'content-type, x-ingest-key',
 }
 const clip = (v: unknown, n: number) => (typeof v === 'string' ? v.slice(0, n) : null)
+
+// An attachment may arrive already uploaded (POST /api/upload/image, same two-step as video) — in that case we
+// get a URL instead of bytes. Pin it to the exact shape our own asset route mints so a caller cannot smuggle an
+// arbitrary URL into a ticket that humans and agents will click.
+const ASSET_IMAGE_URL = /^\/api\/asset\/[a-zA-Z0-9_-]+\.(png|jpg|jpeg|webp)$/
+const ATTACHMENT_CAPTION_MAX = 2000
+// The cap counts entries we actually STORED, so a couple of malformed ones don't silently cost the reporter
+// slots. This bounds how far we look for those 10 — without it a hostile body could make us walk an arbitrarily
+// long array of junk.
+const ATTACHMENT_SCAN_MAX = 40
+
+// `attachments` is the "ten tickets in one" payload: each entry is a picture with its markup already baked in
+// plus its own caption. Two accepted forms per entry, both optionally captioned:
+//   { image: 'data:image/…', caption? }  — bytes inline (small shots, the overlay path)
+//   { url: '/api/asset/….png', caption? } — already uploaded via /api/upload/image
+// Order is preserved; entries we cannot store are dropped rather than aborting the whole report.
+async function storeAttachments(v: unknown): Promise<Attachment[]> {
+  if (!Array.isArray(v) || !v.length) return []
+  const out: Attachment[] = []
+  for (const raw of v.slice(0, ATTACHMENT_SCAN_MAX)) {
+    if (out.length >= MAX_ATTACHMENTS) break
+    if (!raw || typeof raw !== 'object') continue
+    const a = raw as { image?: unknown; url?: unknown; caption?: unknown }
+    const caption = typeof a.caption === 'string' ? a.caption.slice(0, ATTACHMENT_CAPTION_MAX) : ''
+    let url: string | null = null
+    if (typeof a.image === 'string' && a.image.startsWith('data:image/')) {
+      try {
+        url = await storage.put(a.image)
+      } catch (e) {
+        console.warn('ingest: attachment store failed:', e)
+      }
+    } else if (typeof a.url === 'string' && ASSET_IMAGE_URL.test(a.url)) {
+      url = a.url
+    }
+    if (url) out.push({ id: crypto.randomUUID(), url, caption, at: Date.now() })
+  }
+  return out
+}
 
 // Never trust the client: keep only known keys and re-cap the arrays server-side (defence in depth on top
 // of the extension's own caps). Drop the whole bundle if it serialises to something implausibly large.
@@ -80,8 +119,12 @@ export async function POST(req: Request) {
     }
   }
 
+  // Extra annotated images, each with its own caption. Additional to `screenshot`, never a replacement for it —
+  // the quick overlay path still sends only `screenshot` and must behave exactly as before.
+  const attachments = await storeAttachments(body.attachments)
+
   const note = clip(body.note, 5000) || ''
-  if (!note && !screenshotUrl) {
+  if (!note && !screenshotUrl && !attachments.length) {
     return NextResponse.json({ ok: false, error: 'empty' }, { status: 400, headers: CORS })
   }
 
@@ -165,6 +208,7 @@ export async function POST(req: Request) {
       video: !!videoUrl,
       videoSeconds,
       videoFrames: videoFrames?.length ?? 0,
+      attachments: attachments.length,
     })
   }
 
@@ -182,10 +226,11 @@ export async function POST(req: Request) {
     videoSeconds,
     videoTrim,
     videoFrames,
+    attachments,
     type: asType(body.type),
     severity: asSeverity(body.severity),
   })
 
   repo.logEvent({ projectId: targetProjectId, reportId: row.id, kind: 'created', actor: 'extension', detail: (note || '(без заметки)').slice(0, 120) })
-  return NextResponse.json({ ok: true, id: row.id }, { headers: CORS })
+  return NextResponse.json({ ok: true, id: row.id, attachments: row.attachments.length }, { headers: CORS })
 }

@@ -7,6 +7,7 @@ import EditableNote from '@/components/EditableNote'
 import CommentThread from '@/components/CommentThread'
 import CopyId from '@/components/CopyId'
 import ShotWithEditor from '@/components/ShotWithEditor'
+import AttachmentGallery from '@/components/AttachmentGallery'
 import VerifyBlock from '@/components/VerifyBlock'
 import ReproContext from '@/components/ReproContext'
 import ReplayPlayer from '@/components/ReplayPlayer'
@@ -48,6 +49,8 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
       {r.screenshotUrl ? <ShotWithEditor src={r.screenshotUrl} reportId={r.id} /> : null}
 
       <EditableNote id={r.id} value={r.note} />
+
+      <AttachmentGallery items={r.attachments} reportId={r.id} />
 
       <div className="dmeta">
         <span className="k">Page</span>

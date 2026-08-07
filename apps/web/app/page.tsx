@@ -166,6 +166,8 @@ export default async function Home({
 
           {rows.map((r) => {
             const badges = contextBadges(r.context) ?? []
+            // A ticket carrying several annotated images is worth several ordinary ones — say so on the board.
+            if (r.attachments.length) badges.push({ t: `📎 ${r.attachments.length}` })
             if (r.videoUrl) badges.push({ t: '🎥 видео' })
             else if (r.replayUrl) badges.push({ t: '▶ replay' })
             const nComments = repo.countComments(r.id) // an agent's reply should be visible from the board

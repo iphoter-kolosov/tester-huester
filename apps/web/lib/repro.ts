@@ -15,6 +15,10 @@ export type ReproVisual = {
   watchRange: { from: number; to: number } | null
   frames: { at: number; url: string }[]
   screenshotUrl: string | null
+  // The reporter's own numbered images, in the order they were attached, each with the caption they wrote for
+  // it. Deliberately flattened to {n, url, caption}: `n` is the number the human sees in the dashboard, so an
+  // agent quoting "attachment 3" and the reporter mean the same picture.
+  attachments: { n: number; url: string; caption: string }[]
   instruction: string
 }
 
@@ -32,14 +36,24 @@ export type ReproResult =
 
 function buildVisual(r: Report): ReproVisual {
   const frames = r.videoFrames ?? []
-  const instruction = r.videoUrl
+  const attachments = r.attachments.map((a, i) => ({ n: i + 1, url: a.url, caption: a.caption }))
+  const base = r.videoUrl
     ? `This report has a SCREEN RECORDING (${r.videoSeconds ?? '?'}s)${r.videoTrim ? `, and the reporter selected ${r.videoTrim.from.toFixed(1)}s–${r.videoTrim.to.toFixed(1)}s as the part that matters` : ''}. ` +
       (frames.length
         ? `You cannot play video, so LOOK AT THE ${frames.length} FRAMES below (each with its timestamp) before forming any theory — they show what the reporter saw, in order. Fetch each frame URL and view it as an image.`
         : `No frames were extracted, so ask the reporter (add_comment) what happens in the recording, or open ${r.videoUrl} yourself if you can render video.`)
     : r.screenshotUrl
       ? 'No recording — the screenshot is the visual evidence. View it before forming a theory.'
-      : 'No visual evidence attached.'
+      : attachments.length
+        ? 'No recording and no main screenshot — the attached images below are the whole of the visual evidence.'
+        : 'No visual evidence attached.'
+  // Attachments are not decoration: the reporter drew on each one and captioned it separately, so each is its
+  // own claim about its own screen. An agent that reads the note and skips them is answering a fraction of the
+  // ticket — say the count, say they are ordered, and say to fetch every one.
+  const attachNote = attachments.length
+    ? ` This report also carries ${attachments.length} ATTACHED IMAGE${attachments.length > 1 ? 'S' : ''} (\`visual.attachments\`, numbered in the reporter's order, each already marked up and captioned by them). ` +
+      `Fetch every attachment URL and view it as an image before forming a theory — treat attachment N and its caption as a separate point the reporter is making, and answer all of them.`
+    : ''
   return {
     hasVideo: !!r.videoUrl,
     videoUrl: r.videoUrl,
@@ -47,7 +61,8 @@ function buildVisual(r: Report): ReproVisual {
     watchRange: r.videoTrim,
     frames,
     screenshotUrl: r.screenshotUrl,
-    instruction,
+    attachments,
+    instruction: base + attachNote,
   }
 }
 
@@ -55,8 +70,18 @@ export function buildRepro(r: Report): ReproResult {
   const visual = buildVisual(r)
   const ctx = r.context as ReproBundle | null
   if (!ctx) {
-    // Still hand back the visual half: a video-only report is not an empty report.
-    return { kind: 'none', message: `report ${r.id} has no captured repro context (screenshot/video only).`, visual }
+    // Still hand back the visual half: a video-only or attachments-only report is not an empty report.
+    // Name what the ticket ACTUALLY carries. Listing "screenshot/video" unconditionally told an agent to go
+    // look at evidence that may not exist — the one thing this message is for is saying what is there.
+    const only = [
+      r.screenshotUrl ? 'screenshot' : '',
+      r.videoUrl ? 'video' : '',
+      r.attachments.length ? `${r.attachments.length} attached images` : '',
+    ]
+      .filter(Boolean)
+      .join('/')
+    const what = only ? `${only} only` : 'note only'
+    return { kind: 'none', message: `report ${r.id} has no captured repro context (${what}). Read visual.instruction.`, visual }
   }
   const steps = reproSteps(ctx)
   const errors = (ctx.console ?? []).filter((c) => c.level === 'error')
