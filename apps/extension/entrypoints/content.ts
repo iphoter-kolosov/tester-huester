@@ -574,7 +574,9 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
   // Attachments belong to the standalone editor window; this overlay has one canvas and cannot show them. It
   // never destroys them either (the draft is shallow-merged), but it must not let the tester send a report
   // that silently drops them, so the count is carried and named wherever it matters.
-  const draftAttachments = draft?.attachments?.length ?? 0
+  // Mutable: zeroed once the tester has been shown the count and has explicitly declined moving to the window,
+  // so the second Send goes through instead of asking the same question forever.
+  let draftAttachments = draft?.attachments?.length ?? 0
 
   // Everything worth keeping, written to storage on every meaningful change. `immediate` skips the debounce:
   // only note typing can afford to wait, because only note typing happens dozens of times a second.
@@ -1493,16 +1495,30 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
   function setMsg(t: string, cls = '') { msg.textContent = t; msg.className = 'msg ' + cls }
 
   sendBtn.addEventListener('click', async () => {
-    // This overlay cannot carry the attachments the editor window collected. Sending from here would file the
-    // ticket without them and then clear the draft — losing them for good. Say it before, not after.
-    if (
-      draftAttachments &&
-      !confirm(
-        `В черновике ${draftAttachments} ${plural(draftAttachments, 'вложение', 'вложения', 'вложений')}. ` +
-        'Они видны только в отдельном окне (⇗ Открыть в окне) и в этот тикет НЕ попадут.\n\n' +
-        'Отправить без них?',
+    // This overlay cannot carry the attachments the editor window collected, so sending from here would file
+    // the ticket without them and then clear the draft — losing them for good. The default action (Enter / OK)
+    // therefore SAVES the work by moving to the window; discarding has to be chosen deliberately. A dialog
+    // whose easiest answer destroys work is a trap, not a warning.
+    if (draftAttachments) {
+      const n = `${draftAttachments} ${plural(draftAttachments, 'вложение', 'вложения', 'вложений')}`
+      const toWindow = confirm(
+        `В черновике ${n} — отсюда они не отправятся.\n\n` +
+        'OK — открыть отдельное окно и отправить оттуда, со всеми вложениями.\n' +
+        'Отмена — остаться здесь (тогда нажмите Send ещё раз, чтобы отправить БЕЗ вложений).',
       )
-    ) return
+      if (toWindow) {
+        setMsg('Переношу в отдельное окно…')
+        void chrome.runtime
+          .sendMessage({ type: 'TH_EDITOR_OPEN', fresh: false })
+          .then((r) => { if (!r?.ok) setMsg('Окно редактора не открылось: ' + (r?.error || 'нет ответа'), 'err') })
+          .catch((e) => setMsg('Окно редактора не открылось: ' + String(e), 'err'))
+        return
+      }
+      // Second press files without them — but only after the tester has seen the count and declined the window.
+      draftAttachments = 0
+      setMsg(`Вложения (${n}) останутся в черновике. Нажмите Send ещё раз, чтобы отправить без них.`, 'warn')
+      return
+    }
     const cfg = await getConfig()
 
     // Prepare the recording FIRST, so its real numbers (raw size, compressed size, why it was dropped) can ride
