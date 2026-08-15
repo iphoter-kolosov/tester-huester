@@ -1,7 +1,11 @@
 :root {
   --bg: #0b0f1a; --panel: #131a2b; --panel2: #0f1626; --border: #223049;
   --text: #e6edf7; --muted: #8ea0bd; --accent: #38bdf8;
-  --new: #38bdf8; --triaged: #f59e0b; --fixed: #34d399; --wontfix: #64748b;
+  /* the lifecycle, in colour. --fixed keeps its name because the "как проверить" block and the copied-id flash
+     already paint with it; --verified is the lifecycle's name for the same green. --review is deliberately the
+     only violet on the board: that status means somebody is blocked until a person looks. */
+  --new: #38bdf8; --taken: #f59e0b; --review: #a78bfa; --fixed: #34d399; --verified: var(--fixed);
+  --rejected: #f43f5e; --wontfix: #64748b;
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
@@ -19,6 +23,11 @@ a { color: inherit; text-decoration: none; }
 .tab { display: inline-flex; align-items: center; gap: 7px; border: 0; background: transparent; color: var(--muted); border-radius: 8px; padding: 6px 14px; font-size: 13px; font-weight: 700; cursor: pointer; }
 .tab:hover { color: var(--text); }
 .tab.on { background: var(--panel); color: var(--text); box-shadow: 0 1px 0 rgba(0,0,0,.3); }
+/* the owner's own queue — it keeps its colour whether or not it is the selected tab */
+.tab-review { color: var(--review); }
+.tab-review:hover { color: var(--review); }
+.tab.on.tab-review { color: var(--review); }
+.tab-review .tabn { background: color-mix(in srgb, var(--review) 35%, var(--border)); }
 .tabn { font-size: 10.5px; font-weight: 800; background: var(--border); color: var(--text); border-radius: 999px; padding: 0 6px; min-width: 17px; text-align: center; }
 .filts { display: flex; gap: 7px; flex-wrap: wrap; align-items: center; margin-left: auto; }
 .fc { appearance: none; border: 1px solid var(--border); background: var(--panel2); color: var(--text); border-radius: 9px; padding: 7px 11px; font-size: 12.5px; font-weight: 600; cursor: pointer; }
@@ -84,6 +93,9 @@ a { color: inherit; text-decoration: none; }
 .row { display: grid; grid-template-columns: 104px minmax(0,1fr) auto; gap: 16px; align-items: center; padding: 12px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); margin-bottom: 10px; transition: border-color .12s; }
 .row:hover { border-color: color-mix(in srgb, var(--accent) 34%, var(--border)); }
 .row-arch { opacity: .62; }
+/* waiting for a verdict — visible from across the board, before you read a single word of the row */
+.row-review { border-color: color-mix(in srgb, var(--review) 55%, var(--border)); box-shadow: inset 4px 0 0 var(--review); }
+.row-review:hover { border-color: var(--review); }
 .rowthumb { display: block; }
 .thumb { width: 104px; height: 68px; object-fit: cover; border-radius: 8px; background: var(--panel2); border: 1px solid var(--border); }
 .noimg { width: 104px; height: 68px; border-radius: 8px; background: var(--panel2); border: 1px solid var(--border); display: grid; place-items: center; color: var(--muted); font-size: 22px; }
@@ -110,9 +122,13 @@ a { color: inherit; text-decoration: none; }
 .ec.sv-high { color: #fcd34d; border-color: color-mix(in srgb, #f59e0b 45%, var(--border)); }
 .ec.sv-crit { color: #fda4af; border-color: color-mix(in srgb, #f43f5e 50%, var(--border)); }
 .ec.st-new { color: var(--new); border-color: color-mix(in srgb, var(--new) 45%, var(--border)); }
-.ec.st-triaged { color: var(--triaged); border-color: color-mix(in srgb, var(--triaged) 45%, var(--border)); }
-.ec.st-fixed { color: var(--fixed); border-color: color-mix(in srgb, var(--fixed) 45%, var(--border)); }
+.ec.st-taken { color: var(--taken); border-color: color-mix(in srgb, var(--taken) 45%, var(--border)); }
+/* the loudest control on the board: a filled chip, not an outline — it is the only status waiting on a person */
+.ec.st-needs_review { color: #1b1035; background: var(--review); border-color: var(--review); font-weight: 800; }
+.ec.st-verified { color: var(--verified); border-color: color-mix(in srgb, var(--verified) 45%, var(--border)); }
+.ec.st-rejected { color: var(--rejected); border-color: color-mix(in srgb, var(--rejected) 50%, var(--border)); }
 .ec.st-wontfix { color: var(--wontfix); }
+.rowctl-err { max-width: 340px; font-size: 11.5px; line-height: 1.4; color: #fda4af; text-align: right; }
 .ea { border: 1px solid var(--border); background: var(--panel2); color: var(--muted); border-radius: 8px; padding: 5px 10px; font-size: 11.5px; font-weight: 700; cursor: pointer; white-space: nowrap; }
 .ea:hover { color: var(--text); border-color: var(--accent); }
 .ea:disabled { opacity: .5; cursor: default; }
@@ -122,7 +138,7 @@ a { color: inherit; text-decoration: none; }
 /* detail */
 .back { color: var(--muted); font-size: 13px; }
 .back:hover { color: var(--text); }
-.archbadge { margin-left: 10px; font-size: 11px; font-weight: 700; color: var(--triaged); border: 1px solid color-mix(in srgb, var(--triaged) 45%, var(--border)); border-radius: 999px; padding: 2px 9px; vertical-align: middle; }
+.archbadge { margin-left: 10px; font-size: 11px; font-weight: 700; color: var(--taken); border: 1px solid color-mix(in srgb, var(--taken) 45%, var(--border)); border-radius: 999px; padding: 2px 9px; vertical-align: middle; }
 .dctl { margin: 4px 0 6px; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
 .dctl .rowctl { align-items: flex-start; }
 .dctl .rowctl-selects { justify-content: flex-start; }
@@ -308,6 +324,9 @@ button.tidbig { border: 0; padding: 0; }
 .vfysteps { margin: 10px 0 0; padding-left: 22px; display: flex; flex-direction: column; gap: 5px; }
 .vfysteps li { font-size: 13px; line-height: 1.5; }
 .vfysteps li::marker { color: var(--fixed); font-weight: 800; }
+.vfyev { display: flex; gap: 8px; margin-top: 10px; padding-top: 9px; border-top: 1px solid color-mix(in srgb, var(--fixed) 25%, var(--border)); font-size: 12.5px; line-height: 1.45; }
+.vfyevk { flex: none; color: var(--muted); font-weight: 800; font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em; padding-top: 3px; }
+.vfyevv { white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; }
 .vfyraw { margin-top: 8px; font-size: 10.5px; color: var(--muted); font-family: ui-monospace, Menlo, Consolas, monospace; word-break: break-all; user-select: all; }
 .vfycompact { margin: 8px 0 0; padding: 9px 11px; border-radius: 9px; }
 .vfycompact .vfyttl { font-size: 11.5px; }
@@ -318,6 +337,54 @@ button.tidbig { border: 0; padding: 0; }
 .vfymissing { border: 1px dashed color-mix(in srgb, #f59e0b 45%, var(--border)); background: color-mix(in srgb, #f59e0b 7%, transparent); border-radius: 10px; padding: 9px 13px; margin: 14px 0; font-size: 12.5px; color: #fcd34d; }
 /* board marker: this ticket carries a one-click check */
 .hascheck { font-size: 10px; font-weight: 800; color: var(--fixed); border: 1px solid color-mix(in srgb, var(--fixed) 45%, var(--border)); border-radius: 999px; padding: 1px 7px; }
+
+/* addressing: filed by / for whom / held by — three fixed slots, so a column of rows scans as a table */
+.who { display: flex; gap: 14px; flex-wrap: wrap; align-items: center; margin-top: 6px; }
+.dctl + .who, .h + .who { margin: 6px 0 10px; }
+.whoitem { display: inline-flex; align-items: baseline; gap: 5px; font-size: 11.5px; }
+.whok { color: var(--muted); text-transform: uppercase; letter-spacing: .04em; font-weight: 800; font-size: 9.5px; }
+.whov { font-weight: 700; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; }
+.whov-none { color: var(--muted); font-weight: 400; }
+
+/* the work report an executor hands over: what / where / how / proof, pinned above the ticket */
+.wr { margin: 12px 0; border: 1px solid color-mix(in srgb, var(--review) 40%, var(--border)); background: color-mix(in srgb, var(--review) 7%, var(--panel)); border-radius: 14px; padding: 13px 15px; }
+.wrhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.wrttl { font-weight: 800; font-size: 13px; color: var(--review); }
+.wrwho { font-size: 12px; font-weight: 700; }
+.wrwhen { font-size: 11px; color: var(--muted); margin-left: auto; }
+.wrpart { margin-bottom: 4px; }
+.wrk { font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin-bottom: 3px; }
+.wrbody { white-space: pre-wrap; line-height: 1.5; font-size: 13.5px; }
+
+/* the owner's verdict: accept in one click, return with the reason that becomes the rework order */
+.vd { margin: 12px 0 16px; border: 1px solid var(--border); background: var(--panel); border-radius: 14px; padding: 12px 15px; }
+.vd-wait { border-color: color-mix(in srgb, var(--review) 55%, var(--border)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--review) 12%, transparent); }
+.vdhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.vdttl { font-weight: 800; font-size: 13px; }
+.vd-wait .vdttl { color: var(--review); }
+.vdsub { font-size: 11.5px; color: var(--muted); }
+.vdacts { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.vdbtn { border-radius: 10px; padding: 8px 16px; font-size: 13px; font-weight: 800; cursor: pointer; border: 1px solid transparent; }
+.vdbtn:disabled { opacity: .45; cursor: default; }
+.vdacc { background: var(--verified); border-color: var(--verified); color: #06281c; }
+.vdacc:hover:not(:disabled) { filter: brightness(1.1); }
+.vdrej { background: transparent; border-color: color-mix(in srgb, var(--rejected) 55%, var(--border)); color: #fda4af; }
+.vdrej:hover:not(:disabled) { background: color-mix(in srgb, var(--rejected) 18%, transparent); border-color: var(--rejected); }
+.vdasg { display: inline-flex; align-items: center; gap: 6px; margin-left: auto; }
+.vdasgk { font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.vdasgin { width: 170px; border: 1px solid var(--border); background: var(--panel2); color: var(--text); border-radius: 9px; padding: 6px 10px; font-size: 12.5px; }
+.vdasgin:focus { outline: none; border-color: var(--accent); }
+.vdasgbtn { border: 1px solid var(--border); background: var(--panel2); color: var(--muted); border-radius: 9px; padding: 6px 12px; font-size: 12px; font-weight: 700; cursor: pointer; }
+.vdasgbtn:hover:not(:disabled) { color: var(--text); border-color: var(--accent); }
+.vdasgbtn:disabled { opacity: .5; cursor: default; }
+.vdreason { margin-top: 10px; }
+.vdta { width: 100%; min-height: 72px; padding: 10px 13px; background: var(--panel2); border: 1px solid color-mix(in srgb, var(--rejected) 45%, var(--border)); border-radius: 11px; color: var(--text); font: inherit; line-height: 1.45; resize: vertical; outline: none; }
+.vdta:focus { border-color: var(--rejected); }
+.vdreasonfoot { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.vdreasonfoot .vdbtn { margin-left: auto; }
+.vdcancel { border: 0; background: transparent; color: var(--muted); font-size: 12px; cursor: pointer; }
+.vdcancel:hover { color: var(--text); }
+.vderr { margin-top: 10px; padding: 9px 12px; border: 1px solid color-mix(in srgb, var(--rejected) 50%, var(--border)); background: color-mix(in srgb, var(--rejected) 10%, transparent); border-radius: 10px; color: #fda4af; font-size: 12.5px; line-height: 1.45; }
 
 /* attachments: up to ten annotated images, each its own numbered unit with its own caption */
 .atts { margin-top: 18px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); padding: 14px 16px; }

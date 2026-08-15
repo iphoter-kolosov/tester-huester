@@ -1,17 +1,65 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { repo, checkAgentStatusClaim, normalizeVerifyUrl, normalizeSteps, type Report } from '@th/db'
+import {
+  repo,
+  checkStatusTransition,
+  normalizeIdentity,
+  normalizeVerifyUrl,
+  normalizeSteps,
+  STATUS_NEEDS_REVIEW,
+  type ChangeEvent,
+  type Report,
+  type UpdateFilter,
+} from '@th/db'
+import {
+  ACK_AGENT_DOC,
+  ACK_UPDATES_DOC,
+  AGENT_DOC,
+  ASSIGNEE_DOC,
+  ASSIGN_TASK_DOC,
+  COMMENT_DOC,
+  CREATE_TASK_DOC,
+  DEFAULT_SEVERITY,
+  DEFAULT_TYPE,
+  EVIDENCE_DOC,
+  FILTER,
+  GET_UPDATES_DOC,
+  MY_TASKS_DOC,
+  SET_STATUS_DOC,
+  SEVERITY,
+  SINCE_DOC,
+  STATUS,
+  SUBMIT_REPORT_DOC,
+  TASK_SCAN_LIMIT,
+  TYPE,
+  VERIFY_STEPS_DOC,
+  VERIFY_URL_DOC,
+  WAIT_FOR_UPDATES_DOC,
+  buildPlate,
+  checkLinks,
+  composeTaskNote,
+  taskFiled,
+  taskReporter,
+} from './contract.ts'
 import { buildRepro } from '../../web/lib/repro.ts'
 
-// The MCP surface: an AI agent (Claude Code, the client's agents) pulls captured reports, reads a report's
-// screenshot URL + note, and triages status — the loop's payoff. Reads the same SQLite the web/extension use.
+// The MCP surface against the LOCAL SQLite file — the same tools the remote shim (src/remote.ts) offers over
+// HTTPS, and deliberately the same wording (see ./contract.ts): an agent that learned one server must not be
+// surprised by the other.
 //
-// Scope: if TH_PROJECT_KEY is set (accepts either the project's read_key OR its ingest_key) every tool is
-// pinned to that one project — the agent can't see or touch other sites. Unset → legacy behaviour: all
-// projects, with a warning (fine for a single-tenant local demo).
-const STATUS = z.enum(['new', 'triaged', 'fixed', 'wontfix'])
-const TYPE = z.enum(['feature', 'bug', 'fix', 'text'])
+// What the board is: agents working for each other. One agent files a task FOR another (create_task), the
+// executor takes it and hands the work back with a report (submit_report), and only the agent that FILED the
+// ticket — or the owner — may accept or reject it. Those rules are not restated here; they live in @th/db
+// (checkStatusTransition) and are applied by the same call the HTTP routes make, so the two transports cannot
+// drift into two opinions about what closing a ticket costs.
+//
+// Config (env):
+//   SQLITE_FILE     the database file (defaults to the repo root th.db)
+//   TH_PROJECT_KEY  pins every tool to ONE project (accepts the read_key OR the ingest_key). Unset → all
+//                   projects, with a warning; fine for a single-tenant local demo.
+//   TH_AGENT        (optional) the identity this server acts under; per-call `agent` overrides it. Unset, writes
+//                   are attributed to the project name — which is what this server has always shown them as.
 
 const RAW_KEY = process.env.TH_PROJECT_KEY || ''
 const scoped = RAW_KEY ? repo.getProjectByReadKey(RAW_KEY) ?? repo.getProjectByKey(RAW_KEY) : null
@@ -28,8 +76,26 @@ if (!RAW_KEY) {
 const keyRejected = !!RAW_KEY && !scoped
 const scopeId: string | null = scoped ? scoped.id : null
 
-// Tools that need ONE project (they read the per-project cursor) rather than "all projects": returns the reason
-// to refuse, or null when the call may proceed with a real scopeId.
+const ENV_IDENTITY = normalizeIdentity(process.env.TH_AGENT)
+/** What an unscoped server calls itself: there is no project name to speak under, and this is the author name
+ *  this server has always written into the thread in that case. */
+const UNSCOPED_IDENTITY = 'agent'
+
+/**
+ * Who this call is FROM. Same chain as the HTTP route's actor (declared → configured → project name → project
+ * id), so a status set through MCP and one set through REST are attributed to the same agent and land in the same
+ * inbox. The identity is canonical, which is also why the comment thread now shows it lowercased: one identity,
+ * not a display name here and a key there.
+ */
+function actingIdentity(agent: string | undefined): string {
+  const declared = normalizeIdentity(agent) ?? ENV_IDENTITY
+  if (declared) return declared
+  if (!scoped) return UNSCOPED_IDENTITY
+  return normalizeIdentity(scoped.name) ?? scoped.id
+}
+
+// Tools that need ONE project (they read the per-project cursor, or have to file into a single board) rather than
+// "all projects": returns the reason to refuse, or null when the call may proceed with a real scopeId.
 function needsProject(tool: string): string | null {
   if (keyRejected) return `${tool}: TH_PROJECT_KEY did not match any project on this instance - check the key on the dashboard (projects -> agent).`
   if (!scopeId) return `${tool} needs TH_PROJECT_KEY (a single project); this server is running unscoped.`
@@ -39,143 +105,308 @@ function needsProject(tool: string): string | null {
 const owned = (r: Report | null): r is Report =>
   !!r && !keyRejected && (scopeId === null || r.projectId === scopeId)
 
-const server = new McpServer({ name: 'tester-huester', version: '0.1.0' })
+const say = (text: string) => ({ content: [{ type: 'text' as const, text }] })
+
+/**
+ * One status transition, validated and then written — the local twin of PATCH /api/reports/:id. Both set_status
+ * and submit_report go through here so there is a single write path: validate first, and touch nothing at all if
+ * the transition is refused.
+ */
+function applyStatus(
+  id: string,
+  status: string,
+  fields: { comment?: string; verifyUrl?: string; verifySteps?: string[]; evidence?: string },
+  identity: string,
+): string {
+  const report = repo.resolveReport(id)
+  if (!owned(report)) return `no report ${id}`
+  const body: Record<string, unknown> = {
+    comment: fields.comment,
+    verifyUrl: fields.verifyUrl,
+    verifySteps: fields.verifySteps,
+    evidence: fields.evidence,
+  }
+  const decision = checkStatusTransition(
+    status,
+    body,
+    { status: report.status, creator: report.creator, takenBy: report.takenBy, pageUrl: report.pageUrl },
+    { kind: 'agent', identity },
+  )
+  if (!decision.ok) return `${decision.err.error}: ${decision.err.message}`
+  if (!repo.setStatus(report.id, decision.status)) return `no report ${id}`
+  // A work report from nobody leaves the filer with no one to send the rework back to.
+  if (decision.takenBy) repo.setTaken(report.id, decision.takenBy)
+  repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'status', actor: identity, detail: `${report.status} → ${decision.status}` })
+  if (decision.claim) {
+    repo.addComment({
+      reportId: report.id,
+      author: identity,
+      authorKind: 'agent',
+      body: decision.claim.body,
+      verifyUrl: decision.claim.verifyUrl,
+      verifySteps: decision.claim.verifySteps,
+      evidence: decision.claim.evidence,
+    })
+    repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'comment', actor: identity, detail: decision.claim.body.slice(0, 200) })
+  }
+  return `report ${report.shortId} → ${decision.status} as "${identity}"${decision.claim?.verifyUrl ? ` (check: ${decision.claim.verifyUrl})` : ''}`
+}
+
+/**
+ * The journal read, filtered or not — the local twin of GET /api/updates. `cursor` is the value to ack in BOTH
+ * modes: the last event seq when unfiltered, and how far the window was SCANNED when filtered, because acking the
+ * last matching event would silently drop everything the filter skipped inside that same window.
+ */
+function readEvents(
+  projectId: string,
+  since: number,
+  identity: string,
+  filters: UpdateFilter[],
+  limit: number,
+): { events: ChangeEvent[]; cursor: number } {
+  if (!filters.length) {
+    const events = repo.eventsSince(projectId, since, limit)
+    return { events, cursor: events.length ? events[events.length - 1]!.seq : since }
+  }
+  const { events, scannedTo } = repo.eventsSinceFor(projectId, since, identity, filters, limit)
+  return { events, cursor: scannedTo }
+}
+
+/**
+ * Whose journal position this read belongs to. A filtered read is one agent's slice of the board, so it keeps
+ * its own position; an unfiltered read is the whole project and keeps the shared one, exactly as before
+ * identities existed. Returned to the caller as `agent` so the ack can name the same position — the remote
+ * server sends the identity to the collector under precisely the same condition.
+ */
+function cursorIdentity(identity: string, filters: UpdateFilter[]): string | null {
+  return filters.length ? identity : null
+}
+
+const server = new McpServer({ name: 'tester-huester', version: '0.2.0' })
 
 server.tool(
   'list_reports',
-  'List captured QA reports, newest first. Optionally filter by status and/or type (feature|bug|fix|text). Scoped to the configured project when TH_PROJECT_KEY is set.',
+  'List captured QA reports, newest first. Optionally filter by status and/or type (feature|bug|fix|text). Scoped to the configured project when TH_PROJECT_KEY is set. For "what is on MY plate" use my_tasks instead.',
   { status: STATUS.optional(), type: TYPE.optional(), limit: z.number().int().min(1).max(500).optional() },
   async ({ status, type, limit }) => {
     // A rejected key must never widen to "all projects": scopeId is null both when unscoped (allowed) and when
     // the key failed to resolve (forbidden), so the flag — not the id — is what decides.
-    if (keyRejected) {
-      return { content: [{ type: 'text', text: needsProject('list_reports')! }] }
-    }
-    return { content: [{ type: 'text', text: JSON.stringify(repo.listReports({ projectId: scopeId ?? undefined, status, type, limit }), null, 2) }] }
+    if (keyRejected) return say(needsProject('list_reports')!)
+    return say(JSON.stringify(repo.listReports({ projectId: scopeId ?? undefined, status, type, limit }), null, 2))
+  },
+)
+
+server.tool(
+  'my_tasks',
+  MY_TASKS_DOC,
+  {
+    agent: z.string().optional().describe(AGENT_DOC),
+    status: STATUS.optional().describe('Narrow every bucket to one status, e.g. needs_review to see only what awaits your verdict.'),
+  },
+  async ({ agent, status }) => {
+    if (keyRejected) return say(needsProject('my_tasks')!)
+    const reports = repo.listReports({ projectId: scopeId ?? undefined, status, limit: TASK_SCAN_LIMIT })
+    return say(JSON.stringify(buildPlate(reports, actingIdentity(agent)), null, 2))
   },
 )
 
 server.tool(
   'get_report',
-  'Get one report by id (note, screenshot URL, page URL, status, type, severity, metadata).',
+  'Get one report by id (note, screenshot URL, page URL, status, type, severity, who filed it, who holds it, metadata).',
   { id: z.string() },
   async ({ id }) => {
     const r = repo.resolveReport(id)
-    return { content: [{ type: 'text', text: owned(r) ? JSON.stringify(r, null, 2) : `no report ${id}` }] }
+    return say(owned(r) ? JSON.stringify(r, null, 2) : `no report ${id}`)
   },
 )
 
 server.tool(
   'wait_for_updates',
-  'BLOCK until something happens in this project (new report, status change, edit, reply from the reporter), then return those changes. Use as your main loop instead of re-listing reports. Returns immediately if changes are pending.',
-  { seconds: z.number().int().min(1).max(55).optional(), limit: z.number().int().min(1).max(200).optional() },
-  async ({ seconds, limit }) => {
+  WAIT_FOR_UPDATES_DOC,
+  {
+    seconds: z.number().int().min(1).max(55).optional().describe('How long to block before giving up (default 30, max 55).'),
+    limit: z.number().int().min(1).max(200).optional(),
+    agent: z.string().optional().describe(AGENT_DOC),
+    filter: z.array(FILTER).min(1).optional().describe('Any subset of inbox | review | rework. Omit for the whole project.'),
+  },
+  async ({ seconds, limit, agent, filter }) => {
     const refuse = needsProject('wait_for_updates')
-    if (refuse || !scopeId) return { content: [{ type: 'text', text: refuse ?? 'wait_for_updates needs TH_PROJECT_KEY' }] }
-    const since = repo.getCursor(scopeId)
+    if (refuse || !scopeId) return say(refuse ?? 'wait_for_updates needs TH_PROJECT_KEY')
+    const identity = actingIdentity(agent)
+    const filters: UpdateFilter[] = filter ?? []
+    const reader = cursorIdentity(identity, filters)
+    const since = repo.getCursor(scopeId, reader)
     const deadline = Date.now() + (seconds ?? 30) * 1000
-    let events = repo.eventsSince(scopeId, since, limit ?? 100)
-    while (!events.length && Date.now() < deadline) {
+    let out = readEvents(scopeId, since, identity, filters, limit ?? 100)
+    while (!out.events.length && Date.now() < deadline) {
       await new Promise((r) => setTimeout(r, 700))
-      events = repo.eventsSince(scopeId, since, limit ?? 100)
+      out = readEvents(scopeId, since, identity, filters, limit ?? 100)
     }
-    const cursor = events.length ? events[events.length - 1]!.seq : since
-    return { content: [{ type: 'text', text: JSON.stringify({ since, cursor, count: events.length, events }, null, 2) }] }
+    return say(JSON.stringify({ since, cursor: out.cursor, latest: repo.latestSeq(scopeId), agent: reader, filter: filters, count: out.events.length, events: out.events }, null, 2))
   },
 )
 
 server.tool(
   'get_updates',
-  'Changes in this project since the last acknowledged position, without waiting — cheap catch-up after a restart.',
-  { since: z.number().int().min(0).optional(), limit: z.number().int().min(1).max(200).optional() },
-  async ({ since, limit }) => {
+  GET_UPDATES_DOC,
+  {
+    since: z.number().int().min(0).optional().describe(SINCE_DOC),
+    limit: z.number().int().min(1).max(200).optional(),
+    agent: z.string().optional().describe(AGENT_DOC),
+    filter: z.array(FILTER).min(1).optional().describe('Any subset of inbox | review | rework. Omit for the whole project.'),
+  },
+  async ({ since, limit, agent, filter }) => {
     const refuse = needsProject('get_updates')
-    if (refuse || !scopeId) return { content: [{ type: 'text', text: refuse ?? 'get_updates needs TH_PROJECT_KEY' }] }
-    const from = since ?? repo.getCursor(scopeId)
-    const events = repo.eventsSince(scopeId, from, limit ?? 100)
-    const cursor = events.length ? events[events.length - 1]!.seq : from
-    return { content: [{ type: 'text', text: JSON.stringify({ since: from, cursor, count: events.length, events }, null, 2) }] }
+    if (refuse || !scopeId) return say(refuse ?? 'get_updates needs TH_PROJECT_KEY')
+    const identity = actingIdentity(agent)
+    const filters: UpdateFilter[] = filter ?? []
+    const reader = cursorIdentity(identity, filters)
+    const from = since ?? repo.getCursor(scopeId, reader)
+    const out = readEvents(scopeId, from, identity, filters, limit ?? 100)
+    return say(JSON.stringify({ since: from, cursor: out.cursor, latest: repo.latestSeq(scopeId), agent: reader, filter: filters, count: out.events.length, events: out.events }, null, 2))
   },
 )
 
 server.tool(
   'ack_updates',
-  'Mark changes up to `cursor` as handled. Call AFTER acting on them — crashing before the ack safely replays them.',
-  { cursor: z.number().int().min(0) },
-  async ({ cursor }) => {
+  ACK_UPDATES_DOC,
+  { cursor: z.number().int().min(0), agent: z.string().optional().describe(ACK_AGENT_DOC) },
+  async ({ cursor, agent }) => {
     const refuse = needsProject('ack_updates')
-    if (refuse || !scopeId) return { content: [{ type: 'text', text: refuse ?? 'ack_updates needs TH_PROJECT_KEY' }] }
-    return { content: [{ type: 'text', text: `cursor → ${repo.setCursor(scopeId, cursor)}` }] }
+    if (refuse || !scopeId) return say(refuse ?? 'ack_updates needs TH_PROJECT_KEY')
+    const reader = normalizeIdentity(agent)
+    return say(`cursor → ${repo.setCursor(scopeId, cursor, reader)}${reader ? ` (for "${reader}")` : ''}`)
   },
 )
 
 server.tool(
   'add_comment',
-  "Post a comment on a report — what you did (commit/PR, the actual cause), why it could not be reproduced, or what you need from the reporter. Attach `verifyUrl` (an absolute http(s) link the reporter can click to see what you describe) and `verifySteps` whenever the comment makes a claim about behaviour. Appears in the ticket's thread for the human to reply to.",
+  "Post a comment on a report — what you did (commit/PR, the actual cause), why it could not be reproduced, or what you need from the reporter. Attach `verifyUrl` and `verifySteps` whenever the comment makes a claim about behaviour. A comment does NOT move the ticket: to hand work back for checking use submit_report.",
   {
     id: z.string(),
     body: z.string().min(1).max(4000),
-    verifyUrl: z.string().url().optional().describe('Absolute http(s) link landing on the exact screen, not the site root.'),
-    verifySteps: z.array(z.string().min(1).max(300)).max(12).optional().describe('Short steps to see it, if the link alone is not enough.'),
+    verifyUrl: z.string().url().optional().describe(VERIFY_URL_DOC),
+    verifySteps: z.array(z.string().min(1).max(300)).max(12).optional().describe(VERIFY_STEPS_DOC),
+    agent: z.string().optional().describe(AGENT_DOC),
   },
-  async ({ id, body, verifyUrl, verifySteps }) => {
+  async ({ id, body, verifyUrl, verifySteps, agent }) => {
     const r = repo.resolveReport(id)
-    if (!owned(r)) return { content: [{ type: 'text', text: `no report ${id}` }] }
+    if (!owned(r)) return say(`no report ${id}`)
     const url = normalizeVerifyUrl(verifyUrl)
-    if (verifyUrl && !url) return { content: [{ type: 'text', text: 'verifyUrl must be an absolute http(s) link' }] }
-    const author = scoped ? scoped.name : 'agent'
-    const c = repo.addComment({ reportId: r!.id, author, authorKind: 'agent', body, verifyUrl: url, verifySteps: normalizeSteps(verifySteps) })
-    repo.logEvent({ projectId: r!.projectId, reportId: r!.id, kind: 'comment', actor: author, detail: body.slice(0, 200) })
-    return { content: [{ type: 'text', text: `comment added to ${id} as "${author}" (${c.id})` }] }
+    if (verifyUrl && !url) return say('verifyUrl must be an absolute http(s) link')
+    const author = actingIdentity(agent)
+    const c = repo.addComment({ reportId: r.id, author, authorKind: 'agent', body, verifyUrl: url, verifySteps: normalizeSteps(verifySteps) })
+    repo.logEvent({ projectId: r.projectId, reportId: r.id, kind: 'comment', actor: author, detail: body.slice(0, 200) })
+    return say(`comment added to ${id} as "${author}" (${c.id})`)
   },
 )
 
 server.tool(
   'list_comments',
-  'Read the comment thread on a report (previous agent notes and the reporter\'s replies), oldest first.',
+  "Read the comment thread on a report (previous agent notes, work reports and the reporter's replies), oldest first.",
   { id: z.string() },
   async ({ id }) => {
     const r = repo.resolveReport(id)
-    if (!owned(r)) return { content: [{ type: 'text', text: `no report ${id}` }] }
-    return { content: [{ type: 'text', text: JSON.stringify(repo.listComments(r!.id), null, 2) }] }
+    if (!owned(r)) return say(`no report ${id}`)
+    return say(JSON.stringify(repo.listComments(r.id), null, 2))
   },
 )
 
 server.tool(
   'set_status',
-  [
-    "Set a report's triage status (new | triaged | fixed | wontfix).",
-    '',
-    'CLOSING A TICKET REQUIRES EVIDENCE — the call is rejected otherwise:',
-    "  • fixed   → `comment` (what was wrong, what changed, which commit) AND `verifyUrl` (absolute http(s) link",
-    '              landing on the exact fixed screen). Add `verifySteps` unless it is obvious on open.',
-    "  • wontfix → `comment` explaining why it is declined.",
-    "  • triaged/new → nothing extra.",
-    '',
-    'The comment is written together with the status — no separate add_comment needed.',
-  ].join('\n'),
+  SET_STATUS_DOC,
   {
     id: z.string(),
     status: STATUS,
-    comment: z.string().min(1).max(4000).optional().describe('Required for fixed/wontfix.'),
-    verifyUrl: z.string().url().optional().describe("Required for 'fixed'."),
-    verifySteps: z.array(z.string().min(1).max(300)).max(12).optional(),
+    agent: z.string().optional().describe(AGENT_DOC),
+    comment: z.string().min(1).max(4000).optional().describe(`${COMMENT_DOC} Required for needs_review, rejected and wontfix.`),
+    verifyUrl: z.string().url().optional().describe(`${VERIFY_URL_DOC} Required for needs_review.`),
+    verifySteps: z.array(z.string().min(1).max(300)).max(12).optional().describe(`${VERIFY_STEPS_DOC} Required for needs_review.`),
+    evidence: z.string().min(1).max(2000).optional().describe(`${EVIDENCE_DOC} Required for needs_review.`),
   },
-  async ({ id, status, comment, verifyUrl, verifySteps }) => {
+  async ({ id, status, agent, comment, verifyUrl, verifySteps, evidence }) =>
+    say(applyStatus(id, status, { comment, verifyUrl, verifySteps, evidence }, actingIdentity(agent))),
+)
+
+server.tool(
+  'submit_report',
+  SUBMIT_REPORT_DOC,
+  {
+    id: z.string(),
+    comment: z.string().min(1).max(4000).describe(`WHAT. ${COMMENT_DOC}`),
+    verifyUrl: z.string().url().describe(`WHERE. ${VERIFY_URL_DOC}`),
+    verifySteps: z.array(z.string().min(1).max(300)).min(1).max(12).describe(`HOW. ${VERIFY_STEPS_DOC}`),
+    evidence: z.string().min(1).max(2000).describe(`PROOF. ${EVIDENCE_DOC}`),
+    agent: z.string().optional().describe(AGENT_DOC),
+  },
+  async ({ id, comment, verifyUrl, verifySteps, evidence, agent }) =>
+    say(applyStatus(id, STATUS_NEEDS_REVIEW, { comment, verifyUrl, verifySteps, evidence }, actingIdentity(agent))),
+)
+
+server.tool(
+  'assign_task',
+  ASSIGN_TASK_DOC,
+  {
+    id: z.string(),
+    assignee: z.string().nullable().describe(`${ASSIGNEE_DOC} null clears it.`),
+    agent: z.string().optional().describe(AGENT_DOC),
+  },
+  async ({ id, assignee, agent }) => {
     const r = repo.resolveReport(id)
-    if (!owned(r)) return { content: [{ type: 'text', text: `no report ${id}` }] }
-    // Same contract as the HTTP path (packages/db/src/verify.ts) — one rule, both transports.
-    const claim = checkAgentStatusClaim(status, { comment, verifyUrl, verifySteps }, r!.pageUrl)
-    if (!claim.ok) return { content: [{ type: 'text', text: `${claim.err.error}: ${claim.err.message}` }] }
-    const ok = repo.setStatus(r!.id, status)
-    if (!ok) return { content: [{ type: 'text', text: `no report ${id}` }] }
-    const author = scoped ? scoped.name : 'agent'
-    repo.logEvent({ projectId: r!.projectId, reportId: r!.id, kind: 'status', actor: author, detail: `${r!.status} → ${status}` })
-    if (claim.claim) {
-      repo.addComment({ reportId: r!.id, author, authorKind: 'agent', body: claim.claim.body, verifyUrl: claim.claim.verifyUrl, verifySteps: claim.claim.verifySteps })
-      repo.logEvent({ projectId: r!.projectId, reportId: r!.id, kind: 'comment', actor: author, detail: claim.claim.body.slice(0, 200) })
+    if (!owned(r)) return say(`no report ${id}`)
+    const to = assignee === null ? null : normalizeIdentity(assignee)
+    // An assignee that normalises to nothing is not "unassign" — that is what null is for. Refusing here keeps a
+    // typo from quietly detaching a ticket from the agent who was supposed to get it.
+    if (assignee !== null && !to) {
+      return say('assignee must be a short identity like "mcp-core" — send null (not an empty string) to clear it.')
     }
-    return { content: [{ type: 'text', text: `report ${id} → ${status}${claim.claim?.verifyUrl ? ` (check: ${claim.claim.verifyUrl})` : ''}` }] }
+    if (!repo.setAssignee(r.id, to)) return say(`no report ${id}`)
+    const actor = actingIdentity(agent)
+    repo.logEvent({
+      projectId: r.projectId,
+      reportId: r.id,
+      kind: 'assigned',
+      actor,
+      detail: to ? `assignee: ${r.assignee ?? '—'} → ${to}` : `assignee cleared (was ${r.assignee ?? '—'})`,
+    })
+    return say(to ? `report ${r.shortId} is now for "${to}" (by "${actor}")` : `report ${r.shortId} is unassigned (by "${actor}")`)
+  },
+)
+
+server.tool(
+  'create_task',
+  CREATE_TASK_DOC,
+  {
+    assignee: z.string().min(1).describe(ASSIGNEE_DOC),
+    title: z.string().min(1).max(200).describe('One line: what must be true when this is done.'),
+    body: z.string().min(1).max(4000).describe('The instruction itself: what is wrong now, where, and what counts as done.'),
+    type: TYPE.optional().describe(`Defaults to ${DEFAULT_TYPE}.`),
+    severity: SEVERITY.optional().describe(`Defaults to ${DEFAULT_SEVERITY}.`),
+    links: z.array(z.string()).max(10).optional().describe('Absolute http(s) links to the screen, PR or spec. The first one becomes the ticket page URL.'),
+    agent: z.string().optional().describe(`${AGENT_DOC} You are filing as this identity, and only this identity (or the owner) can later accept the work.`),
+  },
+  async ({ assignee, title, body, type, severity, links, agent }) => {
+    const refuse = needsProject('create_task')
+    if (refuse || !scopeId) return say(refuse ?? 'create_task needs TH_PROJECT_KEY')
+    const to = normalizeIdentity(assignee)
+    if (!to) return say('assignee must be a short identity like "mcp-core" — the task has to be FOR somebody.')
+    const checked = checkLinks(links)
+    if (!checked.ok) return say(checked.message)
+    const creator = actingIdentity(agent)
+    const note = composeTaskNote(title, body, checked.links)
+
+    const row = repo.createReport({
+      projectId: scopeId,
+      note,
+      creator,
+      assignee: to,
+      reporter: taskReporter(creator),
+      pageUrl: checked.links[0] ?? null,
+      type: type ?? DEFAULT_TYPE,
+      severity: severity ?? DEFAULT_SEVERITY,
+    })
+    repo.logEvent({ projectId: scopeId, reportId: row.id, kind: 'created', actor: creator, detail: note.slice(0, 120) })
+    return say(taskFiled(row.id, creator, to))
   },
 )
 
@@ -188,15 +419,17 @@ server.tool(
   { id: z.string() },
   async ({ id }) => {
     const r = repo.resolveReport(id)
-    if (!owned(r)) return { content: [{ type: 'text', text: `no report ${id}` }] }
+    if (!owned(r)) return say(`no report ${id}`)
     const result = buildRepro(r)
     // Even a context-less report can carry a recording; hand back the visual half rather than 'nothing here'.
-    if (result.kind === 'none') return { content: [{ type: 'text', text: JSON.stringify({ message: result.message, visual: result.visual }, null, 2) }] }
+    if (result.kind === 'none') return say(JSON.stringify({ message: result.message, visual: result.visual }, null, 2))
     const { report, visual, environment, steps, consoleErrors, failedRequests } = result
-    return { content: [{ type: 'text', text: JSON.stringify({ report, visual, environment, steps, consoleErrors, failedRequests }, null, 2) }] }
+    return say(JSON.stringify({ report, visual, environment, steps, consoleErrors, failedRequests }, null, 2))
   },
 )
 
 const transport = new StdioServerTransport()
 await server.connect(transport)
-console.error(`tester-huester MCP server ready (stdio)${scoped ? ` — scoped to "${scoped.name}"` : ''}`)
+console.error(
+  `tester-huester MCP server ready (stdio)${scoped ? ` — scoped to "${scoped.name}"` : ''}${ENV_IDENTITY ? ` as "${ENV_IDENTITY}"` : ''}`,
+)

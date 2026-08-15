@@ -2,10 +2,20 @@ import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import { revalidatePath } from 'next/cache'
 import type { ReproBundle } from '@th/core'
-import { repo, type Report } from '@th/db'
+import { repo, sameIdentity, statusQueryTargets, IDENTITY_OWNER, STATUS_NEEDS_REVIEW, type Report } from '@th/db'
 import Filters from '@/components/Filters'
 import RowControls from '@/components/RowControls'
 import CopyId from '@/components/CopyId'
+import Addressing from '@/components/Addressing'
+import {
+  BOARD_VIEWS,
+  VIEW_ADDRESSED,
+  VIEW_FILED,
+  VIEW_REVIEW,
+  asBoardView,
+  type BoardView,
+  type ViewCounts,
+} from '@/components/boardViews'
 import { isAuthed } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
@@ -64,14 +74,25 @@ function host(pageUrl: string | null): string {
   }
 }
 
+// What each selection means, one predicate per view. Keyed by BoardView so adding a view to the toolbar without
+// saying what it selects fails the build. The owner is an identity like any other here — he files tickets and
+// gets addressed exactly the way an agent does — so "мне" is an identity comparison, not a special case.
+const VIEW_MATCH: Record<BoardView, (r: Report) => boolean> = {
+  [VIEW_REVIEW]: (r) => r.status === STATUS_NEEDS_REVIEW,
+  [VIEW_ADDRESSED]: (r) => sameIdentity(r.assignee, IDENTITY_OWNER),
+  [VIEW_FILED]: (r) => sameIdentity(r.creator, IDENTITY_OWNER),
+}
+const inView = (r: Report, view: BoardView): boolean => VIEW_MATCH[view](r)
+
 export default async function Home({
   searchParams,
 }: {
-  searchParams: Promise<{ site?: string; type?: string; status?: string; sort?: string; project?: string; arch?: string }>
+  searchParams: Promise<{ site?: string; type?: string; status?: string; sort?: string; project?: string; arch?: string; view?: string }>
 }) {
   if (!(await isAuthed())) redirect('/login')
   const sp = await searchParams
   const arch = sp.arch === '1'
+  const view = asBoardView(sp.view)
   const f = { site: sp.site || '', type: sp.type || '', status: sp.status || '', project: sp.project || '', sort: sp.sort === 'old' ? 'old' : 'new' }
 
   const projects = repo.listProjects()
@@ -86,13 +107,21 @@ export default async function Home({
   const siteList = [...siteCounts.keys()].sort((a, b) => (siteCounts.get(b)! - siteCounts.get(a)!) || a.localeCompare(b))
   const siteOpts = siteList.map((s) => ({ value: s, label: `${s} (${siteCounts.get(s)})` }))
 
+  // Counted over the whole tab, not over the current filter: a queue that says "0" only because a site filter is
+  // on would be a lie about how much work is waiting.
+  const viewCounts = Object.fromEntries(
+    BOARD_VIEWS.map((v) => [v, all.filter((r) => inView(r, v)).length]),
+  ) as ViewCounts
+
   const matches = (r: Report) =>
     (!f.site || host(r.pageUrl) === f.site) &&
     (!f.type || r.type === f.type) &&
-    (!f.status || r.status === f.status) &&
-    (!f.project || r.projectId === f.project)
+    // A bookmarked ?status=fixed still means something: the core maps a legacy name onto the rows it became.
+    (!f.status || statusQueryTargets(f.status).includes(r.status)) &&
+    (!f.project || r.projectId === f.project) &&
+    (!view || inView(r, view))
   const shown = all.filter(matches)
-  const hasFilter = !!(f.site || f.type || f.status || f.project)
+  const hasFilter = !!(f.site || f.type || f.status || f.project || view)
 
   // Group visible notes BY SITE; order notes within a group by the chosen sort; float the freshest site up.
   const bySite = new Map<string, Report[]>()
@@ -146,14 +175,18 @@ export default async function Home({
         </form>
       </div>
 
-      <Filters sites={siteOpts} projects={projOpts} archivedCount={archivedCount} />
+      <Filters sites={siteOpts} projects={projOpts} archivedCount={archivedCount} views={viewCounts} />
 
       {all.length === 0 && (
         <div className="empty">
           {arch ? 'Архив пуст.' : <>Пока нет тикетов. Снимайте из расширения (Ctrl+Shift+Y) или POST в <code>/api/ingest</code>.</>}
         </div>
       )}
-      {all.length > 0 && shown.length === 0 && <div className="empty">Ничего не подходит под фильтр.</div>}
+      {all.length > 0 && shown.length === 0 && (
+        <div className="empty">
+          {view === VIEW_REVIEW ? 'Очередь на проверку пуста — никто не ждёт вашего слова.' : 'Ничего не подходит под фильтр.'}
+        </div>
+      )}
 
       {groups.map(({ site, rows }) => (
         <section className="proj" key={site}>
@@ -172,7 +205,9 @@ export default async function Home({
             else if (r.replayUrl) badges.push({ t: '▶ replay' })
             const nComments = repo.countComments(r.id) // an agent's reply should be visible from the board
             return (
-              <div className={'row' + (r.archived ? ' row-arch' : '')} key={r.id}>
+              // A ticket waiting for a verdict is marked on the row itself, not only in its status control:
+              // this is the one state where somebody is blocked until it is looked at.
+              <div className={'row' + (r.archived ? ' row-arch' : '') + (r.status === STATUS_NEEDS_REVIEW ? ' row-review' : '')} key={r.id}>
                 <Link className="rowthumb" href={`/r/${r.id}`}>
                   {r.screenshotUrl ? <img className="thumb" src={r.screenshotUrl} alt="" /> : <span className="noimg">📷</span>}
                 </Link>
@@ -187,6 +222,7 @@ export default async function Home({
                     {r.pageUrl && <a href={r.pageUrl} target="_blank" rel="noreferrer">{r.pageUrl}</a>}
                     {r.viewport && <span>{r.viewport}</span>}
                   </div>
+                  <Addressing creator={r.creator} reporter={r.reporter} assignee={r.assignee} takenBy={r.takenBy} takenAt={r.takenAt} />
                   {badges.length ? (
                     <div className="badges">
                       {badges.map((b) => (

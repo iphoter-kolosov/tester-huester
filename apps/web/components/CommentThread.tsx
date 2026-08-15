@@ -5,7 +5,7 @@ import VerifyBlock from './VerifyBlock'
 
 export type CommentView = {
   id: string; author: string; authorKind: string; body: string; createdAt: number
-  verifyUrl?: string | null; verifySteps?: string[] | null
+  verifyUrl?: string | null; verifySteps?: string[] | null; evidence?: string | null
 }
 
 // Very small markdown: bold **x**, code `x`, image ![alt](url). Nothing else — a full parser would over-invite
@@ -152,7 +152,7 @@ export default function CommentThread({ reportId, comments }: { reportId: string
             })}
           </div>
           {/* The check that came with this message — stays attached to the claim that made it. */}
-          <VerifyBlock url={c.verifyUrl ?? null} steps={c.verifySteps ?? null} compact />
+          <VerifyBlock url={c.verifyUrl ?? null} steps={c.verifySteps ?? null} evidence={c.evidence ?? null} compact />
         </div>
       ))}
 

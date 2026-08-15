@@ -1,13 +1,23 @@
 import { NextResponse } from 'next/server'
-import { repo, checkAgentStatusClaim, type ReportType, type Severity } from '@th/db'
+import {
+  repo,
+  checkStatusTransition,
+  normalizeIdentity,
+  IDENTITY_OWNER,
+  type Actor,
+  type EventKind,
+  type ReportType,
+  type Severity,
+} from '@th/db'
 import { resolveProjectKey } from '@/lib/projectKey'
 import { isAuthed } from '@/lib/auth'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
-const STATUSES = ['new', 'triaged', 'fixed', 'wontfix']
 const TYPES = ['feature', 'bug', 'fix', 'text']
 const SEVERITIES = ['low', 'med', 'high', 'crit']
+// The dashboard's own label for the human in the comment thread.
+const OWNER_DISPLAY_NAME = 'Вы'
 
 // Agent-facing read: one report as JSON, scoped by ?projectKey=<read_key>. 404 if it isn't this project's.
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -23,10 +33,20 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   return NextResponse.json({ ok: true, report, comments: repo.listComments(report.id) })
 }
 
+/**
+ * Who an agent request is FROM. The read key proves which board it may touch; `agent` says which of the agents
+ * working that board is speaking. Old clients send no `agent` at all, so the project name stands in — which is
+ * exactly the identity those clients have always been shown under in the journal and the comment thread.
+ */
+function agentActor(body: Record<string, unknown>, projectName: string, projectId: string): Actor {
+  return { kind: 'agent', identity: normalizeIdentity(body.agent) ?? normalizeIdentity(projectName) ?? projectId }
+}
+
 // Write endpoint with two authorized callers:
-//   • Agent  — `?projectKey=<read_key>` may set `status` ONLY on a report that belongs to that project. This
-//     is the scoped write a dev agent uses to mark its own cases fixed/wontfix as it works through them.
-//   • Human  — the dashboard cookie may set `status` and/or move the report to another project (`projectId`).
+//   • Agent  — `?projectKey=<read_key>` may set `status` and `assignee` ONLY on a report that belongs to that
+//     project. What it may set the status TO depends on who it says it is: an executor can go no further than
+//     `needs_review`; only the agent that FILED the ticket may accept or reject the work (see checkStatusTransition).
+//   • Human  — the dashboard cookie may set anything, including moving the report to another project.
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
   const projectKey = new URL(req.url).searchParams.get('projectKey') || ''
@@ -38,61 +58,135 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     return NextResponse.json({ ok: false, error: 'bad_json' }, { status: 400 })
   }
 
-  // Agent path: scoped status write, authorized by the project read key.
+  // Agent path: scoped write, authorized by the project read key.
   if (projectKey) {
     const project = repo.getProjectByReadKey(projectKey)
     if (!project) {
       return NextResponse.json({ ok: false, error: 'bad_project_key' }, { status: 403 })
     }
-    const status = String(body.status || '')
-    if (!STATUSES.includes(status)) {
-      return NextResponse.json({ ok: false, error: 'bad_status' }, { status: 400 })
-    }
     const report = repo.resolveReport(id)
     if (!report || report.projectId !== project.id) {
       return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
     }
-    // A closing status must arrive WITH its evidence — see lib/verify.ts. Validated before anything is written,
-    // so a rejected claim leaves the ticket exactly as it was.
-    const claim = checkAgentStatusClaim(status, body, report.pageUrl)
-    if (!claim.ok) return NextResponse.json({ ok: false, ...claim.err }, { status: 400 })
-
-    const ok = repo.setStatus(report.id, status)
-    if (!ok) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
-    repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'status', actor: project.name, detail: `${report.status} → ${status}` })
-    // The comment carries the claim, so the thread reads as a record: what changed, where to look, how to check.
-    let comment = null
-    if (claim.claim) {
-      comment = repo.addComment({
-        reportId: report.id,
-        author: project.name,
-        authorKind: 'agent',
-        body: claim.claim.body,
-        verifyUrl: claim.claim.verifyUrl,
-        verifySteps: claim.claim.verifySteps,
-      })
-      repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'comment', actor: project.name, detail: claim.claim.body.slice(0, 200) })
+    const actor = agentActor(body, project.name, project.id)
+    const hasStatus = 'status' in body
+    const hasAssignee = 'assignee' in body
+    if (!hasStatus && !hasAssignee) {
+      return NextResponse.json(
+        { ok: false, error: 'nothing_to_update', message: 'Send "status" (the lifecycle move) and/or "assignee" (hand the ticket to another agent).' },
+        { status: 400 },
+      )
     }
-    return NextResponse.json({ ok: true, status, comment })
+
+    let assignee: string | null = null
+    if (hasAssignee) {
+      assignee = normalizeIdentity(body.assignee)
+      if (body.assignee != null && body.assignee !== '' && !assignee) {
+        return NextResponse.json(
+          { ok: false, error: 'bad_assignee', message: 'assignee must be a short identifier of the agent or department the ticket is FOR; send null or "" to clear it.' },
+          { status: 400 },
+        )
+      }
+    }
+
+    // Validated in full before anything is written, so a refused request leaves the ticket exactly as it was.
+    const decision = hasStatus
+      ? checkStatusTransition(
+          String(body.status ?? ''),
+          body,
+          { status: report.status, creator: report.creator, takenBy: report.takenBy, pageUrl: report.pageUrl },
+          actor,
+        )
+      : null
+    if (decision && !decision.ok) return NextResponse.json({ ok: false, ...decision.err }, { status: 400 })
+
+    if (hasAssignee) {
+      if (!repo.setAssignee(report.id, assignee)) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
+      repo.logEvent({
+        projectId: report.projectId,
+        reportId: report.id,
+        kind: 'assigned',
+        actor: actor.identity,
+        detail: assignee ? `assignee: ${report.assignee ?? '—'} → ${assignee}` : `assignee cleared (was ${report.assignee ?? '—'})`,
+      })
+    }
+
+    let comment = null
+    if (decision && decision.ok) {
+      if (!repo.setStatus(report.id, decision.status)) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
+      if (decision.takenBy) repo.setTaken(report.id, decision.takenBy)
+      repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'status', actor: actor.identity, detail: `${report.status} → ${decision.status}` })
+      // The comment carries the work report, so the thread reads as a record: what changed, where to look, how to
+      // check it, and what proves it.
+      if (decision.claim) {
+        comment = repo.addComment({
+          reportId: report.id,
+          author: actor.identity,
+          authorKind: 'agent',
+          body: decision.claim.body,
+          verifyUrl: decision.claim.verifyUrl,
+          verifySteps: decision.claim.verifySteps,
+          evidence: decision.claim.evidence,
+        })
+        repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'comment', actor: actor.identity, detail: decision.claim.body.slice(0, 200) })
+      }
+    }
+    return NextResponse.json({
+      ok: true,
+      status: decision && decision.ok ? decision.status : report.status,
+      assignee: hasAssignee ? assignee : report.assignee,
+      takenBy: decision && decision.ok && decision.takenBy ? decision.takenBy : report.takenBy,
+      agent: actor.identity,
+      comment,
+    })
   }
 
-  // Human path: dashboard cookie. Full property editing — status, project, type, severity, note, archived.
+  // Human path: dashboard cookie. Full property editing — status, project, type, severity, note, assignee, archived.
   if (!(await isAuthed())) {
     return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
   }
   const before = repo.resolveReport(id)
   if (!before) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
+  const owner: Actor = { kind: 'owner', identity: IDENTITY_OWNER }
   // Every human edit is journalled, so the agent watching this project sees it on its next (cheap) poll —
   // including which project the ticket moved to, since that changes who owns it.
-  const log = (kind: 'status' | 'edited' | 'archived' | 'moved', detail: string, projectId = before.projectId) =>
-    repo.logEvent({ projectId, reportId: before.id, kind, actor: 'human', detail })
+  const log = (kind: EventKind, detail: string, projectId = before.projectId) =>
+    repo.logEvent({ projectId, reportId: before.id, kind, actor: IDENTITY_OWNER, detail })
 
   let touched = false
   if ('status' in body) {
-    const status = String(body.status || '')
-    if (!STATUSES.includes(status)) return NextResponse.json({ ok: false, error: 'bad_status' }, { status: 400 })
-    if (!repo.setStatus(before.id, status)) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
-    log('status', `${before.status} → ${status}`)
+    const decision = checkStatusTransition(
+      String(body.status ?? ''),
+      body,
+      { status: before.status, creator: before.creator, takenBy: before.takenBy, pageUrl: before.pageUrl },
+      owner,
+    )
+    if (!decision.ok) return NextResponse.json({ ok: false, ...decision.err }, { status: 400 })
+    if (!repo.setStatus(before.id, decision.status)) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
+    log('status', `${before.status} → ${decision.status}`)
+    // The owner's verdict reaches the executor as a message, not just a word on a card — this is the whole
+    // instruction behind a rejection.
+    if (decision.claim) {
+      repo.addComment({
+        reportId: before.id,
+        author: OWNER_DISPLAY_NAME,
+        authorKind: 'human',
+        body: decision.claim.body,
+        verifyUrl: decision.claim.verifyUrl,
+        verifySteps: decision.claim.verifySteps,
+        evidence: decision.claim.evidence,
+      })
+      log('comment', decision.claim.body.slice(0, 200))
+    }
+    touched = true
+  }
+  if ('assignee' in body) {
+    const assignee = normalizeIdentity(body.assignee)
+    if (body.assignee != null && body.assignee !== '' && !assignee) {
+      return NextResponse.json({ ok: false, error: 'bad_assignee' }, { status: 400 })
+    }
+    if (!repo.setAssignee(before.id, assignee)) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
+    log('assigned', assignee ? `assignee: ${before.assignee ?? '—'} → ${assignee}` : `assignee cleared (was ${before.assignee ?? '—'})`)
     touched = true
   }
   if ('projectId' in body) {

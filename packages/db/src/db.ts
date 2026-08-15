@@ -2,6 +2,20 @@ import path from 'node:path'
 import crypto from 'node:crypto'
 import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
+import {
+  canonicalStatus,
+  statusQueryTargets,
+  LEGACY_STATUS_FIXED,
+  LEGACY_STATUS_TRIAGED,
+  STATUSES,
+  STATUS_NEEDS_REVIEW,
+  STATUS_NEW,
+  STATUS_REJECTED,
+  STATUS_TAKEN,
+  STATUS_VERIFIED,
+} from './verify'
+
+const STATUSES_FOR_ERROR = STATUSES.join(', ')
 
 // Zero runtime dependencies: Node 24's built-in SQLite. Works identically in plain Node (seed, mcp) and in
 // Next's server runtime (node: builtins are always external), so none of the wasm/native-addon pain.
@@ -32,6 +46,22 @@ function db(): DatabaseSync {
       name text NOT NULL,
       ingest_key text NOT NULL UNIQUE,
       created_at integer NOT NULL
+    );
+    -- Facts about the database itself. Its only job so far is to record that a one-way data backfill already
+    -- ran, so a restart cannot run it a second time over rows that now mean something different.
+    CREATE TABLE IF NOT EXISTS meta (
+      key text PRIMARY KEY,
+      value text NOT NULL
+    );
+    -- One journal position PER AGENT, because several agents now share a board. With a single position per
+    -- project, whichever of them acked first moved the other one's starting point past events it had never been
+    -- shown — and a filtered read makes that certain rather than likely, since each agent is deliberately shown
+    -- only its own slice. Rows appear on first ack; until then the agent reads from the project position.
+    CREATE TABLE IF NOT EXISTS agent_cursors (
+      project_id text NOT NULL,
+      agent text NOT NULL,
+      cursor integer NOT NULL,
+      PRIMARY KEY (project_id, agent)
     );
     -- Change journal. An agent asks "what happened since cursor X" instead of re-reading every ticket to
     -- discover state — one cheap call, and the row itself says what changed and who changed it.
@@ -102,8 +132,49 @@ function db(): DatabaseSync {
   // the claim belongs to the message that made it — a later comment can supersede it with a new link.
   if (!columnExists(c, 'comments', 'verify_url')) c.exec('ALTER TABLE comments ADD COLUMN verify_url text')
   if (!columnExists(c, 'comments', 'verify_steps')) c.exec('ALTER TABLE comments ADD COLUMN verify_steps text')
+  // What PROVES the work — the fourth part of a work report, next to the three that already existed. Its own
+  // column rather than prose inside `body`, because the reviewer looks for it specifically and the dashboard
+  // renders it separately.
+  if (!columnExists(c, 'comments', 'evidence')) c.exec('ALTER TABLE comments ADD COLUMN evidence text')
+  // Addressing. Three distinct questions that `reporter` used to answer at once and badly:
+  //   creator  — who FILED it (canonical identity; the only agent besides the owner allowed to accept the work)
+  //   assignee — who it is FOR (null until someone is put on it)
+  //   taken_by — who is HOLDING it right now, with taken_at saying since when
+  // `reporter` is left exactly as it is: free human-readable text, which is what the extension collects and what
+  // a person reads on the card. Promoting it would have meant rewriting live rows into an identity they never
+  // had — a guess baked into the record.
+  if (!columnExists(c, 'reports', 'creator')) c.exec('ALTER TABLE reports ADD COLUMN creator text')
+  if (!columnExists(c, 'reports', 'assignee')) c.exec('ALTER TABLE reports ADD COLUMN assignee text')
+  if (!columnExists(c, 'reports', 'taken_by')) c.exec('ALTER TABLE reports ADD COLUMN taken_by text')
+  if (!columnExists(c, 'reports', 'taken_at')) c.exec('ALTER TABLE reports ADD COLUMN taken_at integer')
+  c.exec(`
+    CREATE INDEX IF NOT EXISTS reports_assignee_idx ON reports (assignee, created_at);
+    CREATE INDEX IF NOT EXISTS reports_creator_idx ON reports (creator, created_at);
+  `)
+  backfillLifecycleStatuses(c)
   backfillReadKeys(c)
   return c
+}
+
+const LIFECYCLE_BACKFILL_KEY = 'lifecycle_statuses_backfilled'
+
+/**
+ * Move the rows written under the old four-status model onto the lifecycle, ONCE.
+ *
+ * `fixed` becomes `verified`, not `needs_review`: those tickets were closed and accepted under the rules in
+ * force at the time, and reopening them as "waiting for the filer to check" would invent a backlog of reviews
+ * nobody agreed to do.
+ *
+ * The run is recorded because it is not idempotent in meaning, only in SQL. `setStatus` canonicalises on write,
+ * so no fresh `fixed` row can appear — but if a stale client ever wrote one (meaning "claimed, unchecked"), a
+ * second pass would silently promote that claim to accepted. Once is once.
+ */
+function backfillLifecycleStatuses(c: DatabaseSync): void {
+  const done = c.prepare('SELECT value FROM meta WHERE key = ?').get(LIFECYCLE_BACKFILL_KEY)
+  if (done) return
+  c.prepare('UPDATE reports SET status = ? WHERE status = ?').run(STATUS_VERIFIED, LEGACY_STATUS_FIXED)
+  c.prepare('UPDATE reports SET status = ? WHERE status = ?').run(STATUS_TAKEN, LEGACY_STATUS_TRIAGED)
+  c.prepare('INSERT INTO meta (key, value) VALUES (?, ?)').run(LIFECYCLE_BACKFILL_KEY, String(Date.now()))
 }
 
 function columnExists(c: DatabaseSync, table: string, column: string): boolean {
@@ -145,6 +216,9 @@ export type Report = {
   // consumer has to null-check before iterating.
   attachments: Attachment[]
   type: ReportType; severity: Severity | null; archived: boolean
+  // Addressing. `reporter` above stays the free human text; these three are canonical identities (lowercase),
+  // null on every row filed before the lifecycle existed.
+  creator: string | null; assignee: string | null; takenBy: string | null; takenAt: number | null
 }
 
 // Accept only well-formed entries and cap the list. Used on both the write and the read path: a row written by
@@ -170,16 +244,26 @@ export function normalizeAttachments(v: unknown): Attachment[] {
 // The human-facing handle for a ticket: short enough to say and paste, long enough to stay unique.
 export const shortId = (id: string): string => (id || '').replace(/-/g, '').slice(0, 8)
 
-export type EventKind = 'created' | 'status' | 'edited' | 'comment' | 'archived' | 'moved'
+// 'assigned' joins the older kinds rather than reusing 'edited': handing a ticket to another agent is the event
+// that agent is waiting for, and it has to be recognisable without parsing the detail string.
+export type EventKind = 'created' | 'status' | 'edited' | 'comment' | 'archived' | 'moved' | 'assigned'
+
+// The three questions an agent asks the journal about itself. Named here because both the REST layer and the MCP
+// layer must spell them identically — an unrecognised filter name silently returning "everything" is exactly the
+// kind of quiet wrongness this board exists to prevent, so callers validate against this list.
+export const UPDATE_FILTERS = ['inbox', 'review', 'rework'] as const
+export type UpdateFilter = (typeof UPDATE_FILTERS)[number]
 export type ChangeEvent = { seq: number; projectId: string; reportId: string; kind: EventKind; actor: string; detail: string | null; createdAt: number }
 const toEvent = (r: any): ChangeEvent => ({ seq: r.seq, projectId: r.project_id, reportId: r.report_id, kind: r.kind as EventKind, actor: r.actor, detail: r.detail ?? null, createdAt: r.created_at })
 
 export type AuthorKind = 'agent' | 'human'
 // `verifyUrl` / `verifySteps` are the check the author is handing over: WHERE to look and HOW. Required of an
 // agent claiming 'fixed' (enforced at the API layer), optional on any other comment.
+// `evidence` is what PROVES the work — the fourth part of a work report, required of an agent moving a ticket
+// to needs_review.
 export type Comment = {
   id: string; reportId: string; author: string; authorKind: AuthorKind; body: string; createdAt: number
-  verifyUrl: string | null; verifySteps: string[] | null
+  verifyUrl: string | null; verifySteps: string[] | null; evidence: string | null
 }
 
 const toProject = (r: any): Project => ({ id: r.id, name: r.name, ingestKey: r.ingest_key, readKey: r.read_key ?? '', createdAt: r.created_at })
@@ -188,6 +272,7 @@ const toComment = (r: any): Comment => ({
   body: r.body, createdAt: r.created_at,
   verifyUrl: r.verify_url ?? null,
   verifySteps: (() => { const v = parseJson(r.verify_steps); return Array.isArray(v) ? (v as string[]) : null })(),
+  evidence: r.evidence ?? null,
 })
 const toReport = (r: any): Report => ({
   id: r.id, shortId: shortId(r.id), projectId: r.project_id, note: r.note, screenshotUrl: r.screenshot_url, pageUrl: r.page_url,
@@ -199,6 +284,7 @@ const toReport = (r: any): Report => ({
   attachments: normalizeAttachments(parseJson(r.attachments)),
   type: (r.type ?? 'bug') as ReportType, severity: (r.severity ?? null) as Severity | null,
   archived: !!r.archived,
+  creator: r.creator ?? null, assignee: r.assignee ?? null, takenBy: r.taken_by ?? null, takenAt: r.taken_at ?? null,
 })
 
 function parseJson(s: unknown): unknown | null {
@@ -218,6 +304,9 @@ export type NewReport = {
   videoFrames?: { at: number; url: string }[] | null
   attachments?: Attachment[] | null
   type?: ReportType; severity?: Severity | null
+  // Canonical identities (normalizeIdentity), supplied by whoever files the ticket. A capture that says nothing
+  // about who filed it keeps them null — see the ingest route, which fills `creator` from the declared source.
+  creator?: string | null; assignee?: string | null
 }
 
 export const repo = {
@@ -271,25 +360,43 @@ export const repo = {
     const id = crypto.randomUUID()
     const attachments = normalizeAttachments(x.attachments)
     db().prepare(
-      `INSERT INTO reports (id, project_id, note, screenshot_url, page_url, viewport, user_agent, reporter, status, created_at, context, replay_url, video_url, video_seconds, video_trim, video_frames, attachments, type, severity)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    ).run(id, x.projectId, x.note, x.screenshotUrl ?? null, x.pageUrl ?? null, x.viewport ?? null, x.userAgent ?? null, x.reporter ?? null, 'new', Date.now(), x.context != null ? JSON.stringify(x.context) : null, x.replayUrl ?? null, x.videoUrl ?? null, x.videoSeconds ?? null, x.videoTrim ? JSON.stringify(x.videoTrim) : null, x.videoFrames?.length ? JSON.stringify(x.videoFrames) : null, attachments.length ? JSON.stringify(attachments) : null, x.type ?? 'bug', x.severity ?? null)
+      `INSERT INTO reports (id, project_id, note, screenshot_url, page_url, viewport, user_agent, reporter, status, created_at, context, replay_url, video_url, video_seconds, video_trim, video_frames, attachments, type, severity, creator, assignee)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(id, x.projectId, x.note, x.screenshotUrl ?? null, x.pageUrl ?? null, x.viewport ?? null, x.userAgent ?? null, x.reporter ?? null, STATUS_NEW, Date.now(), x.context != null ? JSON.stringify(x.context) : null, x.replayUrl ?? null, x.videoUrl ?? null, x.videoSeconds ?? null, x.videoTrim ? JSON.stringify(x.videoTrim) : null, x.videoFrames?.length ? JSON.stringify(x.videoFrames) : null, attachments.length ? JSON.stringify(attachments) : null, x.type ?? 'bug', x.severity ?? null, x.creator ?? null, x.assignee ?? null)
     return this.getReport(id)!
   },
   // Backwards compatible: the old call site passed only `status`. New filters (projectId, type) are additive
   // and AND-combined; any subset may be supplied. `archived` defaults to 0 (active only) so agents and the
   // main board never see archived tickets; pass archived:true for the archive view, or 'all' for everything.
-  listReports(opts: { projectId?: string; type?: string; status?: string; archived?: boolean | 'all'; limit?: number } = {}): Report[] {
+  listReports(opts: { projectId?: string; type?: string; status?: string; assignee?: string; creator?: string; archived?: boolean | 'all'; limit?: number } = {}): Report[] {
     const lim = Math.min(opts.limit ?? 200, 1000)
     const where: string[] = []
     const args: string[] = []
     if (opts.projectId) { where.push('project_id = ?'); args.push(opts.projectId) }
     if (opts.type) { where.push('type = ?'); args.push(opts.type) }
-    if (opts.status) { where.push('status = ?'); args.push(opts.status) }
+    if (opts.status) {
+      // A legacy status name can mean two lifecycle rows at once, so this is an IN, not an equality.
+      const targets = statusQueryTargets(opts.status)
+      where.push(`status IN (${targets.map(() => '?').join(',')})`)
+      args.push(...targets)
+    }
+    if (opts.assignee) { where.push('assignee = ?'); args.push(opts.assignee) }
+    if (opts.creator) { where.push('creator = ?'); args.push(opts.creator) }
     if (opts.archived === 'all') { /* both */ } else if (opts.archived === true) { where.push('archived = 1') } else { where.push('archived = 0') }
     const clause = where.length ? ` WHERE ${where.join(' AND ')}` : ''
     const rows = db().prepare(`SELECT * FROM reports${clause} ORDER BY created_at DESC LIMIT ?`).all(...args, lim)
     return rows.map(toReport)
+  },
+  // The two selections an agent needs to answer "what is on my plate": what was ADDRESSED to me, and what I
+  // FILED (and therefore have to accept or send back). `identity` must already be canonical — see
+  // normalizeIdentity; passing raw user text here would quietly match nothing.
+  listAddressedTo(identity: string, opts: { projectId?: string; status?: string; archived?: boolean | 'all'; limit?: number } = {}): Report[] {
+    if (!identity) return []
+    return this.listReports({ ...opts, assignee: identity })
+  },
+  listFiledBy(identity: string, opts: { projectId?: string; status?: string; archived?: boolean | 'all'; limit?: number } = {}): Report[] {
+    if (!identity) return []
+    return this.listReports({ ...opts, creator: identity })
   },
   getReport(id: string): Report | null {
     const r = db().prepare('SELECT * FROM reports WHERE id = ?').get(id)
@@ -308,8 +415,24 @@ export const repo = {
     const rows = db().prepare('SELECT * FROM reports WHERE id LIKE ? LIMIT 2').all(s + '%')
     return rows.length === 1 ? toReport(rows[0]) : null
   },
+  // Always stores a canonical lifecycle status, whatever name the caller used. A legacy `fixed` from a client
+  // written before the lifecycle means "claimed done, unchecked" → needs_review; the owner's `fixed` means
+  // acceptance and is resolved to `verified` by the route, which knows who is speaking (see checkStatusTransition).
+  // An unknown status throws instead of being written: a status nobody can filter on is worse than a refusal.
   setStatus(id: string, status: string): boolean {
-    return db().prepare('UPDATE reports SET status = ? WHERE id = ?').run(status, id).changes > 0
+    const canonical = canonicalStatus(status, 'agent')
+    if (!canonical) throw new Error(`setStatus: unknown status "${status}" — expected one of ${STATUSES_FOR_ERROR}`)
+    return db().prepare('UPDATE reports SET status = ? WHERE id = ?').run(canonical, id).changes > 0
+  },
+  // Who the ticket is FOR. Null clears it — a ticket can go back to being unaddressed.
+  setAssignee(id: string, assignee: string | null): boolean {
+    return db().prepare('UPDATE reports SET assignee = ? WHERE id = ?').run(assignee || null, id).changes > 0
+  },
+  // Who is HOLDING it, stamped with when. Cleared together: a holder without a time is a fact with no history,
+  // and a time without a holder is noise.
+  setTaken(id: string, takenBy: string | null): boolean {
+    const at = takenBy ? Date.now() : null
+    return db().prepare('UPDATE reports SET taken_by = ?, taken_at = ? WHERE id = ?').run(takenBy || null, at, id).changes > 0
   },
   setArchived(id: string, archived: boolean): boolean {
     return db().prepare('UPDATE reports SET archived = ? WHERE id = ?').run(archived ? 1 : 0, id).changes > 0
@@ -330,18 +453,72 @@ export const repo = {
       .all(projectId, since, Math.min(limit, 500))
     return rows.map(toEvent)
   },
+  /**
+   * The same journal, narrowed to what concerns ONE agent. Answers the three questions an executor asks on every
+   * loop: what has been addressed to me, what I filed that is now waiting for my review, and what came back to me
+   * as rejected.
+   *
+   * `scannedTo` is the important half of the return. A filtered read still walks a whole window of the journal,
+   * so acking the last MATCHING event would silently swallow everything after it inside that window. `scannedTo`
+   * is the last seq actually examined — the correct thing to ack, because everything up to it has been shown or
+   * deliberately excluded.
+   */
+  eventsSinceFor(
+    projectId: string,
+    since: number,
+    identity: string,
+    filters: UpdateFilter[],
+    limit = 100,
+  ): { events: ChangeEvent[]; scannedTo: number } {
+    const window = Math.min(limit, 500)
+    const edge = db().prepare('SELECT MAX(seq) s FROM (SELECT seq FROM events WHERE project_id = ? AND seq > ? ORDER BY seq ASC LIMIT ?)')
+      .get(projectId, since, window) as { s: number | null }
+    const scannedTo = edge?.s ?? since
+    if (!filters.length || !identity) return { events: [], scannedTo }
+
+    const clauses: string[] = []
+    const args: (string | number)[] = [projectId, since, scannedTo]
+    for (const f of filters) {
+      if (f === 'inbox') { clauses.push('(r.assignee = ? AND r.status = ?)'); args.push(identity, STATUS_NEW) }
+      else if (f === 'review') { clauses.push('(r.creator = ? AND r.status = ?)'); args.push(identity, STATUS_NEEDS_REVIEW) }
+      else if (f === 'rework') { clauses.push('(r.status = ? AND (r.taken_by = ? OR r.assignee = ?))'); args.push(STATUS_REJECTED, identity, identity) }
+    }
+    const rows = db().prepare(
+      `SELECT e.* FROM events e JOIN reports r ON r.id = e.report_id
+       WHERE e.project_id = ? AND e.seq > ? AND e.seq <= ? AND (${clauses.join(' OR ')})
+       ORDER BY e.seq ASC`,
+    ).all(...args)
+    return { events: rows.map(toEvent), scannedTo }
+  },
   latestSeq(projectId: string): number {
     const r = db().prepare('SELECT MAX(seq) s FROM events WHERE project_id = ?').get(projectId) as { s: number | null }
     return r?.s ?? 0
   },
-  getCursor(projectId: string): number {
-    const r = db().prepare('SELECT agent_cursor c FROM projects WHERE id = ?').get(projectId) as { c: number } | undefined
-    return r?.c ?? 0
+  /**
+   * Where this reader has got to in the journal. Without `agent` it is the project position — unchanged, and
+   * still what a client that never says who it is gets.
+   *
+   * With `agent` it is that agent's OWN position, and an agent that has never acked starts at the project
+   * position rather than at zero: seeding from the board's own high-water mark means switching a running client
+   * onto identities costs it no replay of history it already handled, while everything after that point stays
+   * private to each agent. `identity` must already be canonical (see normalizeIdentity) — the ack writes the
+   * same string back, so folding it in only one of the two places would strand the cursor under a second name.
+   */
+  getCursor(projectId: string, agent?: string | null): number {
+    const project = db().prepare('SELECT agent_cursor c FROM projects WHERE id = ?').get(projectId) as { c: number } | undefined
+    const shared = project?.c ?? 0
+    if (!agent) return shared
+    const own = db().prepare('SELECT cursor c FROM agent_cursors WHERE project_id = ? AND agent = ?').get(projectId, agent) as { c: number } | undefined
+    return own ? own.c : shared
   },
   // Only ever moves forward: a late ack from a slow worker must not rewind past newer, already-handled events.
-  setCursor(projectId: string, seq: number): number {
-    const cur = this.getCursor(projectId)
-    const next = Math.max(cur, seq)
+  setCursor(projectId: string, seq: number, agent?: string | null): number {
+    const next = Math.max(this.getCursor(projectId, agent), seq)
+    if (agent) {
+      db().prepare('INSERT INTO agent_cursors (project_id, agent, cursor) VALUES (?,?,?) ON CONFLICT (project_id, agent) DO UPDATE SET cursor = excluded.cursor')
+        .run(projectId, agent, next)
+      return next
+    }
     db().prepare('UPDATE projects SET agent_cursor = ? WHERE id = ?').run(next, projectId)
     return next
   },
@@ -353,11 +530,11 @@ export const repo = {
     const rows = db().prepare('SELECT * FROM comments WHERE report_id = ? ORDER BY created_at ASC').all(reportId)
     return rows.map(toComment)
   },
-  addComment(x: { reportId: string; author: string; authorKind: AuthorKind; body: string; verifyUrl?: string | null; verifySteps?: string[] | null }): Comment {
+  addComment(x: { reportId: string; author: string; authorKind: AuthorKind; body: string; verifyUrl?: string | null; verifySteps?: string[] | null; evidence?: string | null }): Comment {
     const id = crypto.randomUUID()
     const steps = x.verifySteps && x.verifySteps.length ? JSON.stringify(x.verifySteps) : null
-    db().prepare('INSERT INTO comments (id, report_id, author, author_kind, body, created_at, verify_url, verify_steps) VALUES (?,?,?,?,?,?,?,?)')
-      .run(id, x.reportId, x.author, x.authorKind, x.body, Date.now(), x.verifyUrl || null, steps)
+    db().prepare('INSERT INTO comments (id, report_id, author, author_kind, body, created_at, verify_url, verify_steps, evidence) VALUES (?,?,?,?,?,?,?,?,?)')
+      .run(id, x.reportId, x.author, x.authorKind, x.body, Date.now(), x.verifyUrl || null, steps, x.evidence || null)
     return toComment(db().prepare('SELECT * FROM comments WHERE id = ?').get(id))
   },
   // The most recent check handed over on this ticket — what the dashboard pins at the top so the reporter never

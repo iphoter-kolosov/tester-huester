@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { NextResponse } from 'next/server'
-import { repo, MAX_ATTACHMENTS, type Attachment, type ReportType, type Severity } from '@th/db'
+import { repo, MAX_ATTACHMENTS, normalizeIdentity, IDENTITY_EXTENSION, type Attachment, type ReportType, type Severity } from '@th/db'
 import { storage } from '@/lib/storage'
 
 export const runtime = 'nodejs'
@@ -212,9 +212,18 @@ export async function POST(req: Request) {
     })
   }
 
+  // WHO filed this, as a structured identity, and who it is FOR. An agent filing a ticket for another agent
+  // declares both; the extension declares neither, and a capture with no declared filer is the extension's own —
+  // which is the truth, and is what the journal records instead of the flat "extension" it used to claim for
+  // every row regardless of origin.
+  const creator = normalizeIdentity(body.creator) ?? IDENTITY_EXTENSION
+  const assignee = normalizeIdentity(body.assignee)
+
   const row = repo.createReport({
     projectId: targetProjectId,
     note,
+    creator,
+    assignee,
     screenshotUrl,
     pageUrl: clip(body.pageUrl, 2000),
     viewport: clip(body.viewport, 40),
@@ -231,6 +240,6 @@ export async function POST(req: Request) {
     severity: asSeverity(body.severity),
   })
 
-  repo.logEvent({ projectId: targetProjectId, reportId: row.id, kind: 'created', actor: 'extension', detail: (note || '(без заметки)').slice(0, 120) })
-  return NextResponse.json({ ok: true, id: row.id, attachments: row.attachments.length }, { headers: CORS })
+  repo.logEvent({ projectId: targetProjectId, reportId: row.id, kind: 'created', actor: creator, detail: (note || '(без заметки)').slice(0, 120) })
+  return NextResponse.json({ ok: true, id: row.id, creator, assignee, attachments: row.attachments.length }, { headers: CORS })
 }

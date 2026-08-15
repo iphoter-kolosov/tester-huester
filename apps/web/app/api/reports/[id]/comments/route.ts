@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { repo, normalizeVerifyUrl, normalizeSteps } from '@th/db'
+import { repo, normalizeVerifyUrl, normalizeSteps, IDENTITY_OWNER } from '@th/db'
 import { isAuthed } from '@/lib/auth'
 
 export const runtime = 'nodejs'
@@ -63,7 +63,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const comment = repo.addComment({ reportId: r.report.id, author: r.author, authorKind: r.kind, body: text, verifyUrl, verifySteps })
   // Journalled so the other side notices without polling the whole board — this is how an agent learns the
   // reporter answered it.
-  repo.logEvent({ projectId: r.report.projectId, reportId: r.report.id, kind: 'comment', actor: r.kind === 'agent' ? r.author : 'human', detail: text.slice(0, 200) })
+  // The journal records the source, and the owner's source is IDENTITY_OWNER — the same string the status route
+  // writes, so an agent filtering the journal by actor sees one owner, not two.
+  repo.logEvent({ projectId: r.report.projectId, reportId: r.report.id, kind: 'comment', actor: r.kind === 'agent' ? r.author : IDENTITY_OWNER, detail: text.slice(0, 200) })
   return NextResponse.json({ ok: true, comment })
 }
 

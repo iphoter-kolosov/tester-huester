@@ -1,12 +1,16 @@
 {
-  "//": "REMOTE shim — use this from a project chat on YOUR machine to read that project's bugs from the DEPLOYED tester-huester over HTTPS (no DB-file access needed). Copy into the project's .mcp.json (or merge into mcpServers). Replace the tester-huester path, the collector URL, and the read_key (thr_…, shown per-site on the dashboard).",
+  "//": "REMOTE shim — use this from a project chat on YOUR machine to work that project's board on the DEPLOYED tester-huester over HTTPS (no DB-file access needed). Copy into the project's .mcp.json (or merge into mcpServers). Replace the tester-huester path, the collector URL, and the keys (shown per-site on the dashboard).",
+  "//TH_AGENT": "The identity this agent acts under on the board. Everything it writes is attributed to this string, and its inbox (my_tasks, get_updates filter=inbox) is read under the same one — keep it stable. Omit it and the collector uses the project name instead.",
+  "//TH_INGEST_KEY": "Only create_task needs this: the read_key (thr_…) is read-scoped by design and cannot file new tickets. Leave it out if this agent should be able to work the board but not add to it.",
   "mcpServers": {
     "tester-huester": {
       "command": "npx",
       "args": ["-y", "tsx", "/ABSOLUTE/PATH/TO/tester-huester/apps/mcp/src/remote.ts"],
       "env": {
         "TH_COLLECTOR": "https://qa.ihor.work",
-        "TH_PROJECT_KEY": "thr_paste_the_projects_read_key_here"
+        "TH_PROJECT_KEY": "thr_paste_the_projects_read_key_here",
+        "TH_AGENT": "name-this-agent",
+        "TH_INGEST_KEY": "th_paste_the_projects_ingest_key_here"
       }
     }
   }

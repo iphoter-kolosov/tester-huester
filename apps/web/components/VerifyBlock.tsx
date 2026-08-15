@@ -4,15 +4,19 @@
 export default function VerifyBlock({
   url,
   steps,
+  evidence = null,
   author,
   compact = false,
 }: {
   url: string | null
   steps: string[] | null
+  // What PROVES the work — the fourth part of a work report. It lives with the link and the steps because a
+  // reviewer reads all three in one breath: open this, do that, and here is what already passed.
+  evidence?: string | null
   author?: string
   compact?: boolean
 }) {
-  if (!url && !(steps && steps.length)) return null
+  if (!url && !(steps && steps.length) && !evidence) return null
   let host = ''
   try {
     if (url) host = new URL(url).host
@@ -38,6 +42,12 @@ export default function VerifyBlock({
             <li key={i}>{s}</li>
           ))}
         </ol>
+      ) : null}
+      {evidence ? (
+        <div className="vfyev">
+          <span className="vfyevk">🧾 Чем доказано</span>
+          <span className="vfyevv">{evidence}</span>
+        </div>
       ) : null}
       {url ? <div className="vfyraw">{url}</div> : null}
     </div>
