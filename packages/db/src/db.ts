@@ -522,8 +522,17 @@ export const repo = {
     return db().prepare('UPDATE reports SET archived = ? WHERE id = ?').run(archived ? 1 : 0, id).changes > 0
   },
   // Hard delete — the UI only offers this from the archive (delete = irreversible).
+  // A hard delete takes the whole ticket with it. Dropping only the `reports` row left its comments and journal
+  // entries behind pointing at an id that no longer resolves: invisible in the UI, still counted by anything
+  // that reads the journal, and impossible to find later precisely because the ticket they explain is gone.
+  // There are no foreign keys here (sqlite without PRAGMA foreign_keys), so the cascade has to be written out.
   deleteReport(id: string): boolean {
-    return db().prepare('DELETE FROM reports WHERE id = ?').run(id).changes > 0
+    const c = db()
+    const gone = c.prepare('DELETE FROM reports WHERE id = ?').run(id).changes > 0
+    if (!gone) return false
+    c.prepare('DELETE FROM comments WHERE report_id = ?').run(id)
+    c.prepare('DELETE FROM events WHERE report_id = ?').run(id)
+    return true
   },
   // ── change journal: what an agent polls instead of re-reading the board ───────────────────────────────
   logEvent(x: { projectId: string; reportId: string; kind: EventKind; actor: string; detail?: string }): number {
