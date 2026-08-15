@@ -519,3 +519,7 @@ button.tidbig { border: 0; padding: 0; }
 .att .dshotedit { top: 22px; }
 .attcap { margin: 2px 0 0; font-size: 13.5px; line-height: 1.5; white-space: pre-wrap; }
 .attcap-empty { color: var(--muted); font-style: italic; }
+
+/* door to the connection instructions, sitting in the strip where the owner already looks for agent keys */
+.keyconnect { display: inline-flex; align-items: center; padding: 6px 12px; border-radius: 9px; font-size: 12px; font-weight: 800; color: var(--accent); border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.keyconnect:hover { background: var(--accent); color: #06131f; }

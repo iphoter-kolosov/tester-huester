@@ -17,6 +17,12 @@ tar --exclude=node_modules --exclude=.next --exclude=.turbo --exclude=.wxt \
     -czf - . | $SSH 'mkdir -p ~/tester-huester && tar -xzf - -C ~/tester-huester'
 
 echo "== build =="
+# The onboarding doc is GENERATED from the same module the servers use. Nothing pulled this gate, so the
+# doc could silently drift back into being a stale hand-written copy - exactly the defect it replaced.
+# A deploy is the last honest moment to catch it: refuse to ship a tree whose doc no longer matches.
+echo "== onboarding doc up to date? =="
+pnpm --filter @th/mcp docs --check
+
 $SSH 'cd ~/tester-huester && docker compose up -d --build' 2>&1 | tail -25
 
 # Wait on an endpoint that OPENS THE DATABASE, not on "/". Migrations are lazy (ensureSchema runs on the

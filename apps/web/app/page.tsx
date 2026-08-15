@@ -182,6 +182,9 @@ export default async function Home({
 
       <div className="keys">
         <span className="keyslbl">projects</span>
+        {/* The keys strip is where the owner already comes looking for what to hand an agent — so the door to the
+            full connection instructions belongs here, not only on the roster page nobody visits first. */}
+        <Link className="keyconnect" href="/agents/connect">⇗ Подключить агента</Link>
         {projects.map((p) => (
           <span className="keychip" key={p.id}>
             <b>{p.name}</b>
