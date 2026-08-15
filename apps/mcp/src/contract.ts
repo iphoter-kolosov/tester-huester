@@ -22,6 +22,12 @@ import {
 // Why a third file instead of two tidy self-contained servers: a tool that exists — or behaves — differently on
 // one of them is a trap for the agent that learned the other. The rules themselves stay in @th/db
 // (checkStatusTransition); this module is how those rules are WORDED to the caller, and that has to be one text.
+//
+// The sibling of this file is @th/db's onboarding.ts — the greeting both servers send as MCP `instructions`, and
+// the collector serves from GET /api/onboarding. It is agent-facing wording too, but it lives in @th/db rather
+// than here because Next has to render it and this module's zod / MCP-tool dependencies do not belong in a web
+// route. Tool DESCRIPTIONS (read when a tool is about to be used) stay here; the ONBOARDING (read once, by every
+// agent, before anything) is there.
 
 // ── vocabulary ──────────────────────────────────────────────────────────────────────────────────────────────
 

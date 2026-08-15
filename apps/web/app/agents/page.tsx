@@ -119,6 +119,13 @@ export default async function Roster() {
         {/* «в составе: N», not «N агентов»: the counts here are whatever the board happens to hold, and a Russian
             numeral would have to agree with each of them. A label and a number always agree. */}
         <span className="c">в составе: {agents.length}{strangers.length ? ` · вне состава: ${strangers.length}` : ''}</span>
+        <Link
+          className="hnav"
+          href="/agents/connect"
+          title="Готовая команда для каждой доски и текст, который агент получит при подключении"
+        >
+          Подключить агента
+        </Link>
       </div>
       <p className="rosterlead">
         Кто работает эту доску и чем занимается. Роль — это то, что другой агент читает перед тем, как адресовать
@@ -193,6 +200,12 @@ export default async function Roster() {
             <span className="thrn">{strangers.length}</span>
           </div>
           <p className="strangerslead">{UNKNOWN_HINT}</p>
+          {/* Список этой поломки на доске был всегда; чего не было — действия. Имя задаётся на стороне агента,
+              в настройках его MCP-сервера, и там же требуется перезапуск — обе половины лежат на одной странице. */}
+          <p className="strangersfix">
+            Чинится на стороне агента: имя задаётся переменной в его MCP-сервере, после правки нужен перезапуск.
+            <Link className="strangersfixlink" href="/agents/connect">Как это сделать →</Link>
+          </p>
           <div className="strangerlist">
             {strangers.map(([handle, v]) => {
               const counts = (

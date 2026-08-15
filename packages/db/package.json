@@ -11,7 +11,7 @@
   },
   "scripts": {
     "seed": "tsx src/seed.ts",
-    "test": "tsx src/verify.test.ts && tsx src/cursors.test.ts"
+    "test": "tsx src/verify.test.ts && tsx src/cursors.test.ts && tsx src/roster.test.ts && tsx src/onboarding.test.ts"
   },
   "devDependencies": {
     "tsx": "^4.19.2"

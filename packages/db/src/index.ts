@@ -38,3 +38,11 @@ export type {
   AssigneeDecision, RosterEntry, Speaker,
 } from './verify'
 export type { Comment, AuthorKind, ChangeEvent, EventKind } from './db'
+export {
+  buildInstructions,
+  buildConnectSnippet,
+  CONNECT_RESTART_NOTE,
+  ONBOARDING_TOOLS,
+  REPO_PATH_PLACEHOLDER,
+} from './onboarding'
+export type { OnboardingFacts, IdentityView, RosterView } from './onboarding'

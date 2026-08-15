@@ -421,12 +421,49 @@ button.tidbig { border: 0; padding: 0; }
 .strangers { margin-top: 22px; border: 1px solid var(--border); border-radius: 14px; background: var(--panel); padding: 14px 16px; }
 .strangershead { display: flex; align-items: center; gap: 9px; margin-bottom: 8px; }
 .strangerslead { color: var(--muted); font-size: 12.5px; line-height: 1.55; max-width: 760px; margin: 0 0 12px; }
+.strangersfix { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin: -4px 0 12px; font-size: 12.5px; line-height: 1.55; color: var(--muted); max-width: 760px; }
+.strangersfixlink { color: var(--accent); font-weight: 700; white-space: nowrap; }
+.strangersfixlink:hover { text-decoration: underline; }
 .strangerlist { display: flex; flex-direction: column; gap: 7px; }
 .stranger { display: flex; align-items: baseline; gap: 10px; border: 1px solid var(--border); background: var(--panel2); border-radius: 10px; padding: 7px 12px; }
 .stranger:hover { border-color: color-mix(in srgb, var(--accent) 40%, var(--border)); }
 .stranger-flat:hover { border-color: var(--border); }
 .stranger .aghandle { color: #fcd34d; margin-right: auto; }
 .strangern { font-size: 11px; color: var(--muted); }
+
+/* «Подключить агента»: одна команда на доску + текст, который агент получит при подключении */
+.cnsteps { margin: 0 0 16px; padding-left: 20px; display: flex; flex-direction: column; gap: 9px; max-width: 820px; font-size: 13px; line-height: 1.6; color: var(--muted); }
+.cnsteps li::marker { color: var(--accent); font-weight: 800; }
+.cnsteps b { color: var(--text); }
+.cnsteps code, .cningest code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--accent); background: var(--panel2); border: 1px solid var(--border); border-radius: 6px; padding: 1px 6px; }
+/* перезапуск — единственный шаг, который молча пропускают, поэтому он громче остальных */
+.cnnote { border: 1px solid color-mix(in srgb, var(--taken) 55%, var(--border)); background: color-mix(in srgb, var(--taken) 12%, transparent); border-radius: 12px; padding: 11px 15px; margin-bottom: 20px; max-width: 820px; font-size: 13px; line-height: 1.55; color: #fcd34d; }
+.cnnote b { color: #fff; }
+/* страница объясняет команду словами: если слова разошлись с командой, это красный флаг, а не оттенок */
+.cnalert { border: 1px solid var(--rejected); background: color-mix(in srgb, var(--rejected) 12%, transparent); border-radius: 12px; padding: 11px 15px; margin-bottom: 18px; font-size: 13px; line-height: 1.55; color: #fda4af; }
+.cnproj { border: 1px solid var(--border); border-radius: 14px; background: var(--panel); padding: 13px 15px; margin-bottom: 14px; }
+.cnhead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.cnname { font-size: 16px; font-weight: 800; letter-spacing: -.01em; }
+.cnkeyk { font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.cnsnip { position: relative; }
+.cnsnippre { margin: 0; padding: 13px 15px; background: var(--panel2); border: 1px solid var(--border); border-radius: 12px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.6; color: var(--text); overflow-x: auto; white-space: pre; user-select: all; }
+.cnsnipbtn { margin-top: 9px; border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--border)); background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text); border-radius: 10px; padding: 7px 16px; font-size: 13px; font-weight: 700; cursor: pointer; }
+.cnsnipbtn:hover { border-color: var(--accent); }
+.cnsnipbtn-done { color: var(--verified); border-color: color-mix(in srgb, var(--verified) 50%, var(--border)); background: color-mix(in srgb, var(--verified) 12%, transparent); }
+.cnsniperr { margin-top: 7px; font-size: 12px; line-height: 1.45; color: #fda4af; }
+.cnkeyless { border: 1px dashed color-mix(in srgb, var(--rejected) 45%, var(--border)); border-radius: 12px; padding: 11px 14px; font-size: 12.5px; line-height: 1.55; color: #fda4af; }
+.cnkeyless a, .cnwhatlead a { color: var(--accent); }
+.cningest { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-top: 11px; }
+.cningestk { font-size: 9.5px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.cningest code { color: var(--muted); word-break: break-all; user-select: all; }
+.cningesthint { font-size: 11.5px; color: var(--muted); font-style: italic; }
+.cnwhat { margin-top: 12px; border-top: 1px solid var(--border); padding-top: 11px; }
+.cnwhatsum { cursor: pointer; font-size: 12.5px; font-weight: 700; color: var(--muted); list-style-position: outside; }
+.cnwhatsum:hover { color: var(--text); }
+.cnwhatlead { margin: 9px 0 0; font-size: 12px; line-height: 1.55; color: var(--muted); max-width: 760px; }
+/* pre, не pre-wrap: в тексте есть колонки, выровненные пробелами, и перенос по ширине окна ломает их —
+   владелец должен видеть ровно то, что получит агент */
+.cnwhatpre { margin: 9px 0 0; padding: 13px 15px; background: var(--panel2); border: 1px solid var(--border); border-radius: 12px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 11.5px; line-height: 1.6; color: var(--text); overflow-x: auto; white-space: pre; }
 
 /* the work report an executor hands over: what / where / how / proof, pinned above the ticket */
 .wr { margin: 12px 0; border: 1px solid color-mix(in srgb, var(--review) 40%, var(--border)); background: color-mix(in srgb, var(--review) 7%, var(--panel)); border-radius: 14px; padding: 13px 15px; }

@@ -3,6 +3,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import {
   repo,
+  buildInstructions,
   checkAssignee,
   checkStatusTransition,
   normalizeAgentRole,
@@ -12,7 +13,9 @@ import {
   normalizeSteps,
   STATUS_NEEDS_REVIEW,
   type ChangeEvent,
+  type IdentityView,
   type Report,
+  type RosterView,
   type UpdateFilter,
 } from '@th/db'
 import {
@@ -226,7 +229,24 @@ function cursorIdentity(identity: string, filters: UpdateFilter[]): string | nul
   return filters.length ? identity : null
 }
 
-const server = new McpServer({ name: 'tester-huester', version: '0.3.0' })
+/**
+ * The greeting handed to every client on initialize. Computed once, at startup, from what this server can see of
+ * the board right now — which for the local server is everything, since the roster is a table away.
+ *
+ * A rejected key is reported as an unreadable roster rather than an empty one: "nobody is here" would invite the
+ * agent to believe it is alone on a board it cannot actually reach.
+ */
+function onboardingFacts(): { boardName: string | null; identity: IdentityView; roster: RosterView } {
+  const identity: IdentityView = ENV_IDENTITY
+    ? { kind: 'declared', identity: ENV_IDENTITY }
+    : { kind: 'fallback', signedAs: boardIdentity() }
+  const roster: RosterView = keyRejected
+    ? { kind: 'unreadable', reason: 'TH_PROJECT_KEY matches no project on this instance' }
+    : { kind: 'known', agents: repo.listAgents() }
+  return { boardName: scoped ? scoped.name : null, identity, roster }
+}
+
+const server = new McpServer({ name: 'tester-huester', version: '0.3.0' }, { instructions: buildInstructions(onboardingFacts()) })
 
 server.tool(
   'whoami',

@@ -56,7 +56,13 @@ pnpm install
 pnpm --filter @th/db seed        # creates th.db + a Demo project (ingest key: th_demo_key_0001)
 pnpm --filter @th/web dev        # dashboard + API at http://localhost:4319
 pnpm --filter @th/mcp smoke      # drive the MCP server like an agent would
+pnpm --filter @th/mcp docs       # regenerate docs/AGENT-WORKFLOW.md (--check fails if it is stale)
 ```
+
+Agents are not told how this board works by a block somebody pastes into a `CLAUDE.md`. Both MCP servers send the
+rules as the protocol's `instructions` on connect, the collector serves the same text from
+`GET /api/onboarding?projectKey=<read key>`, and `docs/AGENT-WORKFLOW.md` is generated from it — one author,
+`packages/db/src/onboarding.ts`, built from the constants that enforce the rules.
 
 Build + load the extension:
 

@@ -1,7 +1,15 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
-import { STATUS_NEEDS_REVIEW, normalizeIdentity, type AgentProfile, type Report } from '@th/db'
+import {
+  STATUS_NEEDS_REVIEW,
+  buildInstructions,
+  normalizeIdentity,
+  type AgentProfile,
+  type IdentityView,
+  type Report,
+  type RosterView,
+} from '@th/db'
 import {
   ACK_AGENT_DOC,
   ACK_UPDATES_DOC,
@@ -107,13 +115,22 @@ function explain(status: number, body: string, auth: Auth): string {
   return message ? `${code}: ${message.slice(0, MAX_ERROR_TEXT)}` : `${code}${hint(status, auth)}`
 }
 
-async function api(path: string, params: Record<string, string | number | undefined> = {}): Promise<string> {
+async function api(
+  path: string,
+  params: Record<string, string | number | undefined> = {},
+  opts: { timeoutMs?: number } = {},
+): Promise<string> {
   const url = new URL(BASE + path)
   url.searchParams.set('projectKey', KEY)
   for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') url.searchParams.set(k, String(v))
   let res: Response
   try {
-    res = await fetch(url, { headers: { Accept: 'application/json' } })
+    // No timeout by default — wait_for_updates is a long poll and a deadline here would cut it off. Only the
+    // startup lookups pass one, because nothing may hold the process between spawn and "ready".
+    res = await fetch(url, {
+      headers: { Accept: 'application/json' },
+      signal: opts.timeoutMs ? AbortSignal.timeout(opts.timeoutMs) : undefined,
+    })
   } catch (e) {
     return `network error reaching ${BASE}: ${String(e)}`
   }
@@ -172,9 +189,9 @@ let cachedProject: ProjectRef | null = null
  * account — passing the id explicitly is what guarantees the task lands on THIS board), and what to call itself
  * when no identity was declared.
  */
-async function projectRef(): Promise<ProjectRef | { err: string }> {
+async function projectRef(opts: { timeoutMs?: number } = {}): Promise<ProjectRef | { err: string }> {
   if (cachedProject) return cachedProject
-  const text = await api('/api/reports', { limit: 1 })
+  const text = await api('/api/reports', { limit: 1 }, opts)
   let parsed: { project?: { id?: unknown; name?: unknown } }
   try {
     parsed = JSON.parse(text) as { project?: { id?: unknown; name?: unknown } }
@@ -217,8 +234,11 @@ async function actingIdentity(agent: string | undefined): Promise<ActingIdentity
  * The roster from the collector. Parsed rather than relayed as text because whoami has to look itself up in it and
  * list_agents has to answer in the same shape the local server does.
  */
-async function fetchRoster(params: { active?: string; board?: string } = {}): Promise<AgentProfile[] | { err: string }> {
-  const text = await api('/api/agents', params)
+async function fetchRoster(
+  params: { active?: string; board?: string } = {},
+  opts: { timeoutMs?: number } = {},
+): Promise<AgentProfile[] | { err: string }> {
+  const text = await api('/api/agents', params, opts)
   let parsed: { agents?: unknown }
   try {
     parsed = JSON.parse(text) as { agents?: unknown }
@@ -231,7 +251,51 @@ async function fetchRoster(params: { active?: string; board?: string } = {}): Pr
 
 const say = (text: string) => ({ content: [{ type: 'text' as const, text }] })
 
-const server = new McpServer({ name: 'tester-huester-remote', version: '0.3.0' })
+/**
+ * How long the greeting may keep the process from being ready. The board is worth naming, but not at the price of
+ * an agent that never launches because its collector is down, so the lookups are on a short leash.
+ */
+const BOOT_LOOKUP_MS = 4000
+
+/** The failure is quoted into the greeting, which every request then carries — enough to recognise, not the page. */
+const BOOT_REASON_MAX = 200
+
+/**
+ * The greeting, built before the transport is connected — instructions are sent once, on initialize, so there is
+ * no later moment to fill them in.
+ *
+ * This is the one place the shim asks the collector a question it does not need in order to work, which is why an
+ * unanswered question is NOT fatal: an agent on a board it can name is better than an agent that will not start.
+ * The failure is carried into the text itself ("the roster could not be read — call list_agents") and shouted on
+ * stderr, so it is visible in both places rather than showing up as a board that looks empty.
+ */
+async function onboardingFacts(): Promise<{ boardName: string | null; identity: IdentityView; roster: RosterView }> {
+  const unset = { err: 'TH_COLLECTOR or TH_PROJECT_KEY is not set' }
+  const lookups: [Promise<ProjectRef | { err: string }>, Promise<AgentProfile[] | { err: string }>] =
+    BASE && KEY
+      ? [projectRef({ timeoutMs: BOOT_LOOKUP_MS }), fetchRoster({}, { timeoutMs: BOOT_LOOKUP_MS })]
+      : [Promise.resolve(unset), Promise.resolve(unset)]
+  const [ref, roster] = await Promise.all(lookups)
+  if ('err' in roster) console.error(`[mcp-remote] the roster could not be read at startup: ${roster.err}`)
+  const boardName = 'err' in ref ? null : ref.name
+  return {
+    boardName,
+    // Without TH_AGENT the collector attributes the write to the project name, so that is what the agent is told
+    // it is signing as — and when even the project could not be read, the sentence drops the name rather than
+    // inventing one.
+    identity: ENV_IDENTITY
+      ? { kind: 'declared', identity: ENV_IDENTITY }
+      : boardName
+        ? { kind: 'fallback', signedAs: boardName }
+        : { kind: 'unknown' },
+    roster: 'err' in roster ? { kind: 'unreadable', reason: roster.err.slice(0, BOOT_REASON_MAX) } : { kind: 'known', agents: roster },
+  }
+}
+
+const server = new McpServer(
+  { name: 'tester-huester-remote', version: '0.3.0' },
+  { instructions: buildInstructions(await onboardingFacts()) },
+)
 
 server.tool(
   'whoami',
