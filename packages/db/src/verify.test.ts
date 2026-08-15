@@ -5,19 +5,29 @@
 import assert from 'node:assert/strict'
 import {
   checkAgentStatusClaim,
+  checkAssignee,
   checkStatusTransition,
   canonicalStatus,
+  describeRoster,
   statusQueryTargets,
+  normalizeAgentRole,
+  normalizeAgentTitle,
   normalizeIdentity,
   normalizeVerifyUrl,
   normalizeSteps,
+  resolveSpeaker,
+  MAX_AGENT_ROLE_LEN,
+  MAX_AGENT_TITLE_LEN,
   MAX_URL_LEN,
   MAX_IDENTITY_LEN,
+  SEEDED_AGENTS,
   STATUS_NEEDS_REVIEW,
   STATUS_TAKEN,
   STATUS_VERIFIED,
+  IDENTITY_EXTENSION,
   IDENTITY_OWNER,
   type Actor,
+  type RosterEntry,
   type TicketFacts,
 } from './verify.ts'
 
@@ -243,6 +253,108 @@ t('the owner still closes a ticket in one click — no work report demanded of t
   assert.equal(r.ok, true)
   assert.equal(r.ok === true && r.status, STATUS_VERIFIED)
   assert.equal(r.ok === true && r.claim, null)
+})
+
+// ── the roster: who exists, and who may be told they exist ────────────────────────────────────────────────
+const BOARD_NAME = 'photoking agents' // a PROJECT name — the exact string that used to get registered as an agent
+
+const roster: RosterEntry[] = [
+  { handle: 'mcp-core', title: 'MCP-ядро', role: 'Держит контракт MCP и схему базы.', active: true },
+  { handle: 'dash-ui', title: 'Дашборд', role: 'Делает экраны владельца.', active: true },
+  { handle: 'old-runner', title: 'Прежний исполнитель', role: 'Выведен из строя 12.08.', active: false },
+]
+
+t('an identity nobody declared is attributed to the board but NEVER registered under its name', () => {
+  const inferred = resolveSpeaker(undefined, BOARD_NAME)
+  // Attribution is unchanged — a row still says where it came from.
+  assert.equal(inferred.identity, BOARD_NAME)
+  // …but the board name must not enter the roster: two agents sharing it would merge into one voice.
+  assert.equal(inferred.rosterHandle, null)
+  for (const nothing of [null, '', '   ', 42, {}]) {
+    assert.equal(resolveSpeaker(nothing, BOARD_NAME).rosterHandle, null, String(nothing))
+  }
+})
+t('a DECLARED identity is both attributed and registered, canonicalised the same way as everywhere else', () => {
+  const declared = resolveSpeaker('  MCP-Core ', BOARD_NAME)
+  assert.equal(declared.identity, 'mcp-core')
+  assert.equal(declared.rosterHandle, 'mcp-core')
+})
+
+t('an unknown assignee is refused, and the refusal carries the roster with the roles', () => {
+  const r = checkAssignee('mpc-core', roster) // a plausible typo, which is the point
+  assert.equal(r.ok, false)
+  assert.equal(r.ok === false && r.err.error, 'unknown_assignee')
+  const msg = r.ok === false ? r.err.message : ''
+  for (const e of roster.filter((x) => x.active)) {
+    assert.ok(msg.includes(e.handle), `the error must list ${e.handle}`)
+    assert.ok(msg.includes(e.role), `and say what ${e.handle} is responsible for`)
+  }
+  // Offering a retired handle here would only earn the caller a second refusal for taking the suggestion…
+  assert.ok(!msg.includes('old-runner'))
+  // …but it is counted, so nobody concludes it was deleted.
+  assert.ok(msg.includes('1 more on the roster are retired'), msg)
+})
+t('a known active assignee is accepted, case and spacing folded', () => {
+  const r = checkAssignee('  Dash-UI ', roster)
+  assert.equal(r.ok, true)
+  assert.equal(r.ok === true && r.assignee, 'dash-ui')
+})
+t('null and "" clear the address — a ticket may go back to being unaddressed', () => {
+  for (const clear of [null, '']) {
+    const r = checkAssignee(clear, roster)
+    assert.equal(r.ok, true, String(clear))
+    assert.equal(r.ok === true && r.assignee, null)
+  }
+})
+t('a retired agent is refused separately, and the answer lists only the ones still taking work', () => {
+  const r = checkAssignee('old-runner', roster)
+  assert.equal(r.ok, false)
+  assert.equal(r.ok === false && r.err.error, 'assignee_inactive')
+  const msg = r.ok === false ? r.err.message : ''
+  assert.ok(msg.includes('mcp-core'))
+  assert.ok(!msg.includes('Выведен из строя'), 'the inactive one must not be offered again in the same breath')
+})
+t('a board name is not an agent: addressing work to it is refused like any other stranger', () => {
+  const r = checkAssignee(BOARD_NAME, roster)
+  assert.equal(r.ok, false)
+  assert.equal(r.ok === false && r.err.error, 'unknown_assignee')
+})
+t('an assignee that normalises to nothing is refused as malformed, not silently cleared', () => {
+  const r = checkAssignee('   ', roster)
+  assert.equal(r.ok, false)
+  assert.equal(r.ok === false && r.err.error, 'bad_assignee')
+})
+t('an empty roster says so, and says how an agent gets onto it', () => {
+  const r = checkAssignee('anyone', [])
+  assert.equal(r.ok, false)
+  assert.ok(r.ok === false && r.err.message.includes('/api/agents'))
+})
+t('an agent that has not described itself is listed with a nudge rather than a blank', () => {
+  const bare: RosterEntry[] = [{ handle: 'newcomer', title: '', role: '', active: true }]
+  const text = describeRoster(bare)
+  assert.ok(text.includes('newcomer'))
+  assert.ok(text.includes('/api/agents'), 'the reader must learn how that entry gets filled in')
+})
+
+t('the owner and the extension are seeded described, so no thread shows a bare handle', () => {
+  const handles = SEEDED_AGENTS.map((a) => a.handle)
+  assert.deepEqual(handles, [IDENTITY_OWNER, IDENTITY_EXTENSION])
+  for (const a of SEEDED_AGENTS) assert.ok(a.role.length > 40, `${a.handle} needs a real role, not a label`)
+  // The extension is a capture channel, not somebody you can hand work to.
+  assert.equal(SEEDED_AGENTS.find((a) => a.handle === IDENTITY_EXTENSION)!.active, false)
+  assert.equal(checkAssignee(IDENTITY_EXTENSION, SEEDED_AGENTS as RosterEntry[]).ok, false)
+  assert.equal(checkAssignee(IDENTITY_OWNER, SEEDED_AGENTS as RosterEntry[]).ok, true)
+})
+
+t('a description is trimmed and capped; a role cannot break the one-line-per-agent listing', () => {
+  assert.equal(normalizeAgentTitle('  MCP   ядро '), 'MCP ядро')
+  assert.equal(normalizeAgentTitle('x'.repeat(MAX_AGENT_TITLE_LEN + 50))!.length, MAX_AGENT_TITLE_LEN)
+  assert.equal(normalizeAgentRole('x'.repeat(MAX_AGENT_ROLE_LEN + 50))!.length, MAX_AGENT_ROLE_LEN)
+  assert.equal(normalizeAgentRole('держит контракт\nи схему'), 'держит контракти схему')
+  for (const v of [undefined, null, 42, '', '   ']) {
+    assert.equal(normalizeAgentTitle(v), null)
+    assert.equal(normalizeAgentRole(v), null)
+  }
 })
 
 console.log(`db/verify: all ${passed} tests passed ✓`)

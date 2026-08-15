@@ -1,16 +1,20 @@
 import { NextResponse } from 'next/server'
 import {
   repo,
+  checkAssignee,
   checkStatusTransition,
   normalizeIdentity,
+  resolveSpeaker,
   IDENTITY_OWNER,
   type Actor,
   type EventKind,
   type ReportType,
   type Severity,
+  type Speaker,
 } from '@th/db'
 import { resolveProjectKey } from '@/lib/projectKey'
 import { isAuthed } from '@/lib/auth'
+import { participantsOf } from '@/lib/roster'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -30,16 +34,32 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   }
   // Comments ride along so an agent picking the ticket up sees the whole conversation — its own earlier notes
   // and the human's replies — without a second call.
-  return NextResponse.json({ ok: true, report, comments: repo.listComments(report.id) })
+  const comments = repo.listComments(report.id)
+  // The same for the voices in that conversation: who filed it, who holds it, and who each author on the thread
+  // is. Only agent authors are looked up — a human comment carries a display name, not an identity.
+  const participants = participantsOf([
+    report.creator,
+    report.assignee,
+    report.takenBy,
+    ...comments.filter((c) => c.authorKind === 'agent').map((c) => c.author),
+  ])
+  return NextResponse.json({
+    ok: true,
+    report,
+    comments,
+    agents: participants.agents,
+    unknownParticipants: participants.unknown,
+  })
 }
 
 /**
  * Who an agent request is FROM. The read key proves which board it may touch; `agent` says which of the agents
  * working that board is speaking. Old clients send no `agent` at all, so the project name stands in — which is
- * exactly the identity those clients have always been shown under in the journal and the comment thread.
+ * exactly the identity those clients have always been shown under in the journal and the comment thread. What
+ * changes with the roster is only that an inferred name is never REGISTERED as an agent: see resolveSpeaker.
  */
-function agentActor(body: Record<string, unknown>, projectName: string, projectId: string): Actor {
-  return { kind: 'agent', identity: normalizeIdentity(body.agent) ?? normalizeIdentity(projectName) ?? projectId }
+function agentSpeaker(body: Record<string, unknown>, projectName: string, projectId: string): Speaker {
+  return resolveSpeaker(body.agent, normalizeIdentity(projectName) ?? projectId)
 }
 
 // Write endpoint with two authorized callers:
@@ -68,7 +88,13 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     if (!report || report.projectId !== project.id) {
       return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
     }
-    const actor = agentActor(body, project.name, project.id)
+    const speaker = agentSpeaker(body, project.name, project.id)
+    const actor: Actor = { kind: 'agent', identity: speaker.identity }
+    // Registered BEFORE the request is judged, and before the assignee is checked against the roster. An agent
+    // that declared a name has acted, whatever the verdict on the write turns out to be — and doing it first is
+    // what lets an agent hand a ticket to itself on its very first call.
+    if (speaker.rosterHandle) repo.touchAgent(speaker.rosterHandle, project.id)
+
     const hasStatus = 'status' in body
     const hasAssignee = 'assignee' in body
     if (!hasStatus && !hasAssignee) {
@@ -80,13 +106,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
     let assignee: string | null = null
     if (hasAssignee) {
-      assignee = normalizeIdentity(body.assignee)
-      if (body.assignee != null && body.assignee !== '' && !assignee) {
-        return NextResponse.json(
-          { ok: false, error: 'bad_assignee', message: 'assignee must be a short identifier of the agent or department the ticket is FOR; send null or "" to clear it.' },
-          { status: 400 },
-        )
-      }
+      const addressed = checkAssignee(body.assignee, repo.listAgents())
+      if (!addressed.ok) return NextResponse.json({ ok: false, ...addressed.err }, { status: 400 })
+      assignee = addressed.assignee
     }
 
     // Validated in full before anything is written, so a refused request leaves the ticket exactly as it was.
@@ -148,6 +170,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   const before = repo.resolveReport(id)
   if (!before) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
   const owner: Actor = { kind: 'owner', identity: IDENTITY_OWNER }
+  // The owner is a participant with a roster row like any other, so his activity is recorded like any other. His
+  // identity is not self-declared but PROVEN by the dashboard cookie, which is why it needs no resolveSpeaker.
+  repo.touchAgent(IDENTITY_OWNER, before.projectId)
   // Every human edit is journalled, so the agent watching this project sees it on its next (cheap) poll —
   // including which project the ticket moved to, since that changes who owns it.
   const log = (kind: EventKind, detail: string, projectId = before.projectId) =>
@@ -181,10 +206,11 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     touched = true
   }
   if ('assignee' in body) {
-    const assignee = normalizeIdentity(body.assignee)
-    if (body.assignee != null && body.assignee !== '' && !assignee) {
-      return NextResponse.json({ ok: false, error: 'bad_assignee' }, { status: 400 })
-    }
+    // The roster check applies to the owner too: a ticket he addresses to a handle nobody answers to is just as
+    // invisible as one an agent misaddresses, and the error hands him the list of who is actually there.
+    const addressed = checkAssignee(body.assignee, repo.listAgents())
+    if (!addressed.ok) return NextResponse.json({ ok: false, ...addressed.err }, { status: 400 })
+    const assignee = addressed.assignee
     if (!repo.setAssignee(before.id, assignee)) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
     log('assigned', assignee ? `assignee: ${before.assignee ?? '—'} → ${assignee}` : `assignee cleared (was ${before.assignee ?? '—'})`)
     touched = true

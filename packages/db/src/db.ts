@@ -4,9 +4,15 @@ import { fileURLToPath } from 'node:url'
 import { DatabaseSync } from 'node:sqlite'
 import {
   canonicalStatus,
+  normalizeAgentRole,
+  normalizeAgentTitle,
+  normalizeIdentity,
   statusQueryTargets,
+  IDENTITY_OWNER,
+  LEGACY_ACTOR_HUMAN,
   LEGACY_STATUS_FIXED,
   LEGACY_STATUS_TRIAGED,
+  SEEDED_AGENTS,
   STATUSES,
   STATUS_NEEDS_REVIEW,
   STATUS_NEW,
@@ -70,7 +76,7 @@ function db(): DatabaseSync {
       project_id text NOT NULL,
       report_id text NOT NULL,
       kind text NOT NULL,                      -- created | status | edited | comment | archived | moved
-      actor text NOT NULL,                     -- 'human' | agent/project name | 'extension'
+      actor text NOT NULL,                     -- an identity: joins agents.handle (see unifyOwnerActor)
       detail text,                             -- e.g. 'new -> fixed', or the comment's first line
       created_at integer NOT NULL
     );
@@ -84,6 +90,21 @@ function db(): DatabaseSync {
       created_at integer NOT NULL
     );
     CREATE INDEX IF NOT EXISTS comments_report_idx ON comments (report_id, created_at);
+    -- The roster. Until it existed, an identity was a bare self-declared string with nothing behind it: no way to
+    -- learn who is on a board, what any of them does, or whether a handle in a thread is still alive. That is why
+    -- the assignee column sat empty on every ticket — addressing work needs a directory to address it INTO.
+    -- handle is the canonical identity (normalizeIdentity) and the join key to reports.creator / .assignee /
+    -- .taken_by and events.actor; the PRIMARY KEY is that string, so a handle cannot exist twice under two casings.
+    CREATE TABLE IF NOT EXISTS agents (
+      handle text PRIMARY KEY,
+      title text NOT NULL DEFAULT '',            -- human name for the UI
+      role text NOT NULL DEFAULT '',             -- what it DOES and answers for — read before addressing it
+      boards text NOT NULL DEFAULT '[]',         -- project ids, JSON: always read with the row, never joined on
+      first_seen integer NOT NULL,
+      last_seen integer NOT NULL,                -- so a dead agent is visibly dead instead of quietly assumed alive
+      active integer NOT NULL DEFAULT 1          -- whether it should still be offered as an assignee
+    );
+    CREATE INDEX IF NOT EXISTS agents_last_seen_idx ON agents (last_seen DESC);
     CREATE TABLE IF NOT EXISTS reports (
       id text PRIMARY KEY,
       project_id text NOT NULL,
@@ -153,10 +174,43 @@ function db(): DatabaseSync {
   `)
   backfillLifecycleStatuses(c)
   backfillReadKeys(c)
+  seedRoster(c)
+  unifyOwnerActor(c)
   return c
 }
 
 const LIFECYCLE_BACKFILL_KEY = 'lifecycle_statuses_backfilled'
+const OWNER_ACTOR_BACKFILL_KEY = 'owner_actor_unified'
+
+/**
+ * Put the owner and the extension on the roster. INSERT OR IGNORE rather than a one-shot guard: the seed must not
+ * overwrite a role the owner has since edited, and "the row exists" is the only condition that matters.
+ */
+function seedRoster(c: DatabaseSync): void {
+  const now = Date.now()
+  const ins = c.prepare(
+    'INSERT OR IGNORE INTO agents (handle, title, role, boards, first_seen, last_seen, active) VALUES (?,?,?,?,?,?,?)',
+  )
+  for (const a of SEEDED_AGENTS) ins.run(a.handle, a.title, a.role, '[]', now, now, a.active ? 1 : 0)
+}
+
+/**
+ * Give the owner ONE name in the journal. The live table holds rows written as 'human' by the dashboard of the
+ * time and newer ones written as 'owner'; both mean the same person, and 'human' is no longer written by anything.
+ *
+ * Rewritten once rather than mapped on read, which was the alternative. A read-time alias would have to be applied
+ * in every place that touches events.actor — the updates route, the dashboard, the roster join added here, and
+ * every consumer written after this sentence — and each of those is a fresh chance to forget it, producing a board
+ * that shows two owners and an agent that can filter on only one of them. This is not rewriting history: nothing
+ * about what happened changes, only the spelling of the actor's name, and it is recorded in `meta` so the pass
+ * cannot run twice.
+ */
+function unifyOwnerActor(c: DatabaseSync): void {
+  const done = c.prepare('SELECT value FROM meta WHERE key = ?').get(OWNER_ACTOR_BACKFILL_KEY)
+  if (done) return
+  const n = c.prepare('UPDATE events SET actor = ? WHERE actor = ?').run(IDENTITY_OWNER, LEGACY_ACTOR_HUMAN).changes
+  c.prepare('INSERT INTO meta (key, value) VALUES (?, ?)').run(OWNER_ACTOR_BACKFILL_KEY, `${Date.now()}:${n}`)
+}
 
 /**
  * Move the rows written under the old four-status model onto the lifecycle, ONCE.
@@ -194,6 +248,36 @@ function backfillReadKeys(c: DatabaseSync): void {
 }
 
 export type Project = { id: string; name: string; ingestKey: string; readKey: string; createdAt: number }
+
+/**
+ * One roster row. Structurally a superset of verify.ts's RosterEntry, so it can be handed straight to
+ * checkAssignee without a mapping step that could drift from what is stored.
+ */
+export type AgentProfile = {
+  handle: string; title: string; role: string; boards: string[]
+  firstSeen: number; lastSeen: number; active: boolean
+}
+
+// A hand-edited or truncated column must not crash a page that lists the roster.
+function parseBoards(v: unknown): string[] {
+  const parsed = parseJson(v)
+  return Array.isArray(parsed) ? (parsed as unknown[]).filter((x): x is string => typeof x === 'string') : []
+}
+
+/** Board membership is a set, and the order is the order the agent first worked them. */
+function mergeBoards(existing: string[], board?: string | null): string[] {
+  return board && !existing.includes(board) ? [...existing, board] : existing
+}
+
+const toAgent = (r: any): AgentProfile => ({
+  handle: r.handle,
+  title: r.title ?? '',
+  role: r.role ?? '',
+  boards: parseBoards(r.boards),
+  firstSeen: r.first_seen,
+  lastSeen: r.last_seen,
+  active: !!r.active,
+})
 // `context` is the repro bundle (env/console/network/actions from @th/core), stored as JSON. Typed as
 // unknown here to keep @th/db dependency-free; consumers cast it to ReproBundle.
 // `type` classifies the note; `severity` is an optional triage weight (null on legacy rows).
@@ -549,6 +633,86 @@ export const repo = {
   countComments(reportId: string): number {
     const r = db().prepare('SELECT COUNT(*) c FROM comments WHERE report_id = ?').get(reportId) as { c: number }
     return r?.c ?? 0
+  },
+
+  // ── the roster: who the handles in creator/assignee/taken_by/actor actually ARE ────────────────────────
+  getAgent(handle: string): AgentProfile | null {
+    const h = normalizeIdentity(handle)
+    if (!h) return null
+    const r = db().prepare('SELECT * FROM agents WHERE handle = ?').get(h)
+    return r ? toAgent(r) : null
+  },
+  /**
+   * Create or describe one agent. Only the supplied fields are written, so an agent registering itself for the
+   * hundredth time cannot blank the role the owner wrote for it by simply not repeating it.
+   *
+   * `handle` must be a real identity — a roster row under an empty name would be a directory entry nobody can
+   * address, so this throws rather than inventing one.
+   *
+   * Describing an agent does NOT move `last_seen`: that column answers "when did this one last ACT", and the owner
+   * writing a role for an agent that went silent a month ago must not make it look alive again. Only touchAgent
+   * moves it.
+   */
+  upsertAgent(x: { handle: string; title?: string | null; role?: string | null; active?: boolean; board?: string | null }): AgentProfile {
+    const handle = normalizeIdentity(x.handle)
+    if (!handle) throw new Error(`upsertAgent: "${String(x.handle)}" is not a usable identity — expected a short handle like "mcp-core"`)
+    const now = Date.now()
+    const before = this.getAgent(handle)
+    const boards = mergeBoards(before?.boards ?? [], x.board)
+    const title = x.title !== undefined ? (normalizeAgentTitle(x.title) ?? '') : (before?.title ?? '')
+    const role = x.role !== undefined ? (normalizeAgentRole(x.role) ?? '') : (before?.role ?? '')
+    const active = x.active !== undefined ? x.active : (before?.active ?? true)
+    if (!before) {
+      db().prepare('INSERT INTO agents (handle, title, role, boards, first_seen, last_seen, active) VALUES (?,?,?,?,?,?,?)')
+        .run(handle, title, role, JSON.stringify(boards), now, now, active ? 1 : 0)
+    } else {
+      db().prepare('UPDATE agents SET title = ?, role = ?, boards = ?, active = ? WHERE handle = ?')
+        .run(title, role, JSON.stringify(boards), active ? 1 : 0, handle)
+    }
+    return this.getAgent(handle)!
+  },
+  /**
+   * Record that this agent just acted, and on which board. Runs on every identified write, so it stays one indexed
+   * lookup and one UPDATE — the boards column is only rewritten when the board is genuinely new to that agent.
+   *
+   * An unregistered handle is created here: that is self-registration, and it is deliberately the ONLY way a row
+   * appears without anyone describing it. The caller decides whether a handle has earned that — see resolveSpeaker,
+   * which returns null for an identity nobody declared.
+   */
+  touchAgent(handle: string, board?: string | null): void {
+    const h = normalizeIdentity(handle)
+    if (!h) throw new Error(`touchAgent: "${String(handle)}" is not a usable identity — callers must pass a canonical handle`)
+    const row = db().prepare('SELECT boards FROM agents WHERE handle = ?').get(h) as { boards: string } | undefined
+    if (!row) {
+      this.upsertAgent({ handle: h, board })
+      return
+    }
+    const boards = parseBoards(row.boards)
+    if (board && !boards.includes(board)) {
+      db().prepare('UPDATE agents SET last_seen = ?, boards = ? WHERE handle = ?').run(Date.now(), JSON.stringify([...boards, board]), h)
+      return
+    }
+    db().prepare('UPDATE agents SET last_seen = ? WHERE handle = ?').run(Date.now(), h)
+  },
+  /**
+   * The whole roster, most recently active first — the answer to "who is here and what do they do". `board`
+   * filters in memory on purpose: the roster is a handful of rows always read whole, and a join table would be a
+   * second schema to migrate for a set that is never queried on its own.
+   */
+  listAgents(opts: { activeOnly?: boolean; board?: string } = {}): AgentProfile[] {
+    const rows = db().prepare('SELECT * FROM agents ORDER BY last_seen DESC').all().map(toAgent)
+    return rows.filter((a) => (opts.activeOnly ? a.active : true) && (opts.board ? a.boards.includes(opts.board) : true))
+  },
+  /**
+   * The roster rows for a specific set of handles — who the participants of these tickets are. Handles with no row
+   * are simply absent from the answer; the caller reports that gap explicitly rather than inventing a profile for
+   * a name nobody claimed.
+   */
+  getAgents(handles: string[]): AgentProfile[] {
+    const wanted = [...new Set(handles.map((h) => normalizeIdentity(h)).filter((h): h is string => !!h))]
+    if (!wanted.length) return []
+    const rows = db().prepare(`SELECT * FROM agents WHERE handle IN (${wanted.map(() => '?').join(',')})`).all(...wanted)
+    return rows.map(toAgent)
   },
 
   // Edit a report's properties after creation. Only the supplied fields are written.

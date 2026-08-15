@@ -2,9 +2,14 @@ import { z } from 'zod'
 import {
   LEGACY_STATUS_FIXED,
   LEGACY_STATUS_TRIAGED,
+  MAX_AGENT_ROLE_LEN,
+  MAX_AGENT_TITLE_LEN,
   STATUSES,
   UPDATE_FILTERS,
+  normalizeIdentity,
   normalizeVerifyUrl,
+  resolveSpeaker,
+  type AgentProfile,
   type Report,
   type ReportType,
   type Severity,
@@ -54,8 +59,11 @@ const AGENT_REPORTER_SUFFIX = ' (агент)'
 
 export const AGENT_DOC =
   'The identity you act under, e.g. "mcp-core". Omit to use TH_AGENT from the environment and, failing that, ' +
-  'the project name. The identity you WRITE under is the identity your inbox is READ under, so keep it stable — ' +
-  'a ticket filed as "core" cannot be accepted by "core-stage".'
+  'the project name — but that last one signs your work with the BOARD\'s name instead of yours; whoami says ' +
+  'which of the three is happening. This identity is also your ROSTER entry: acting under it puts you on the ' +
+  'roster, register_agent describes it, and other agents address work to it (list_agents). The identity you ' +
+  'WRITE under is the identity your inbox is READ under, so keep it stable — a ticket filed as "core" cannot ' +
+  'be accepted by "core-stage".'
 
 export const COMMENT_DOC =
   'What was actually wrong and what changed, with the commit/PR. This is the text the other side acts on.'
@@ -71,13 +79,219 @@ export const EVIDENCE_DOC =
   'What PROVES the work: the test that now passes and its output, the build line, the request/response, a ' +
   'screenshot URL. "Should work" is not evidence.'
 
-export const ASSIGNEE_DOC =
-  'The identity the ticket is FOR — it appears in that agent\'s inbox (get_updates filter="inbox", my_tasks → assigned).'
+export const ASSIGNEE_DOC = [
+  'The handle of the agent this ticket is FOR. Addressing is HOW a task reaches somebody: it lands in that agent\'s',
+  'inbox (get_updates filter="inbox", my_tasks → assigned). An unaddressed task reaches nobody — it sits on the board',
+  'until someone happens to look. The handle must be on the roster: call list_agents first and pick a real one; an',
+  'unknown handle is refused WITH the roster attached, never quietly filed into the void.',
+].join(' ')
 
 export const SINCE_DOC =
   'Read from this journal position instead of the project cursor. Omit in normal use.'
 
+export const AGENT_TITLE_DOC =
+  'Human name for the roster and the dashboard, e.g. "MCP-ядро". Short — the roster is one line per agent.'
+
+export const AGENT_ROLE_DOC =
+  'What you DO and what you answer for, in a sentence or two. This is what another agent reads before deciding ' +
+  'to hand you a task, so write the responsibility ("owns the MCP servers and their contract; does not touch the ' +
+  'dashboard"), not what you are made of.'
+
+export const AGENT_ACTIVE_DOC =
+  'false retires you: the entry stays readable so old threads still make sense, but nobody is offered you as an ' +
+  'assignee any more. Send true to come back.'
+
+// ── who this server is, and where that came from ────────────────────────────────────────────────────────────
+
+/**
+ * Where the acting identity came from. It is a separate answer from the identity itself because the three are not
+ * equally trustworthy: the first two were DECLARED by somebody, the third is the board's own name standing in for
+ * an agent that never named itself — the mechanism that filled the live threads with "erental" and "photoking
+ * agents" and made two agents on one board indistinguishable.
+ */
+export type IdentitySource = 'declared' | 'env' | 'fallback'
+
+/** `rosterHandle` is null exactly when the identity was inferred: a guess may sign a row, never enter the roster. */
+export type ActingIdentity = { identity: string; rosterHandle: string | null; source: IdentitySource }
+
+/**
+ * The identity chain both servers use — per-call `agent`, then TH_AGENT, then the board's own name — resolved in
+ * one place so a ticket filed through the local server and one filed through the remote are attributed the same.
+ *
+ * @param perCall  the `agent` argument of the tool call, unvalidated
+ * @param envIdentity  TH_AGENT, already canonical (null when unset)
+ * @param fallback  what to sign with when nobody declared anything, already canonical
+ */
+export function resolveActing(perCall: unknown, envIdentity: string | null, fallback: string): ActingIdentity {
+  const own = normalizeIdentity(perCall)
+  const declared = own ?? envIdentity
+  const speaker = resolveSpeaker(declared, fallback)
+  return { ...speaker, source: own ? 'declared' : declared ? 'env' : 'fallback' }
+}
+
+const ORIGIN: Record<IdentitySource, string> = {
+  declared: 'the `agent` argument you passed on this call',
+  env: "TH_AGENT in this server's environment",
+  fallback:
+    "NOBODY — no identity was declared, so this is the BOARD's own name standing in for one. It is a fallback, not a name you chose",
+}
+
+/** Said at startup and again in whoami, because a server that has been running for a week is never restarted to read a warning. */
+export function thAgentUnsetWarning(prefix: string): string {
+  return [
+    `${prefix} TH_AGENT is NOT set — every write from this server is signed with the BOARD's name, not with an agent identity.`,
+    `${prefix} Two agents on one board then merge into one indistinguishable voice, and no task can be addressed to either.`,
+    `${prefix} Fix: set TH_AGENT=<your-handle> in this server's environment, or pass \`agent\` on every call. Call whoami to see what is in use.`,
+  ].join('\n')
+}
+
+const FALLBACK_WARNING =
+  'You have no identity of your own: writes are signed with the board\'s name. Nobody can address a task to you, ' +
+  'and a second agent on this board would sign with the same name — the two of you would be one voice in every ' +
+  'thread. Set TH_AGENT=<your-handle> in this server\'s environment, or pass `agent` on every call.'
+
+const UNREGISTERED_WARNING =
+  'You are not on the roster yet, so other agents reading your handle have no idea what you do. It appears there ' +
+  'the moment you write anything under this identity; register_agent is what gives it a title and a role.'
+
+const NO_ROLE_WARNING =
+  'Your roster entry has no role: other agents see a bare handle and have to guess whether the work is yours. ' +
+  'Call register_agent with a role.'
+
+const RETIRED_WARNING =
+  'Your roster entry is retired (active:false): nobody is offered you as an assignee. Call register_agent with ' +
+  'active:true if you are back at work.'
+
+const NEXT_SET_IDENTITY = 'Set TH_AGENT (or pass `agent`) so your work is signed with your own name.'
+const NEXT_REGISTER = 'Call register_agent with a title and a role, so the roster says who you are.'
+const NEXT_LIST = 'Call list_agents before create_task/assign_task — an unknown addressee is refused, and an unaddressed task reaches nobody.'
+
+export type WhoAmI = {
+  identity: string
+  source: IdentitySource
+  origin: string
+  registered: boolean
+  roster: { title: string; role: string; active: boolean; lastSeen: number; boards: string[] } | null
+  board: { id: string; name: string } | null
+  warnings: string[]
+  next: string[]
+}
+
+/**
+ * The answer to "who am I". An agent that cannot say this cannot introduce itself honestly, which is why the
+ * warnings are part of the answer rather than a separate health check nobody would call: whoami is the one tool
+ * an agent has a reason to call before it knows anything is wrong.
+ */
+export function describeSelf(x: {
+  acting: ActingIdentity
+  board: { id: string; name: string } | null
+  profile: AgentProfile | null
+  extraWarnings?: string[]
+}): WhoAmI {
+  const { acting, profile } = x
+  const warnings = [...(x.extraWarnings ?? [])]
+  const next: string[] = []
+  if (acting.source === 'fallback') {
+    warnings.push(FALLBACK_WARNING)
+    next.push(NEXT_SET_IDENTITY)
+  }
+  if (!profile) {
+    warnings.push(UNREGISTERED_WARNING)
+    next.push(NEXT_REGISTER)
+  } else {
+    if (!profile.role) {
+      warnings.push(NO_ROLE_WARNING)
+      next.push(NEXT_REGISTER)
+    }
+    if (!profile.active) warnings.push(RETIRED_WARNING)
+  }
+  next.push(NEXT_LIST)
+  return {
+    identity: acting.identity,
+    source: acting.source,
+    origin: ORIGIN[acting.source],
+    registered: !!profile,
+    roster: profile
+      ? { title: profile.title, role: profile.role, active: profile.active, lastSeen: profile.lastSeen, boards: profile.boards }
+      : null,
+    board: x.board,
+    warnings,
+    next,
+  }
+}
+
+/** One shape for the roster whichever server answered: the local one reads the table and the remote one relays the
+ *  collector, and an agent that learned to read one answer must not have to relearn the other. */
+export function rosterAnswer(agents: AgentProfile[]): { count: number; agents: AgentProfile[] } {
+  return { count: agents.length, agents }
+}
+
+/** Likewise for a registration: the local server writes the row and the remote relays the collector's, and the two
+ *  answers are re-shaped through here rather than each returning whatever its own layer happened to hand back. */
+export function registeredAnswer(agent: AgentProfile): { agent: AgentProfile } {
+  return { agent }
+}
+
+/** Refusing to register the fallback is the whole roster fix: a board name on the roster is a board wearing an
+ *  agent's face, and it is what other agents would then address work to. */
+export const REGISTER_NEEDS_IDENTITY = [
+  'register_agent writes YOUR entry, and this server has no identity of its own — TH_AGENT is unset and no `agent`',
+  'was passed, so writes are signed with the board\'s name. Registering THAT would put a board on the roster as if it',
+  'were an agent, which is the exact defect the roster exists to fix.',
+  'Set TH_AGENT=<your-handle> in this server\'s environment, or pass `agent` on this call, then register.',
+].join(' ')
+
+/** The one refusal create_task must make itself on both transports: an ingest that accepts a null assignee is
+ *  right to (a ticket may be unaddressed), but a HANDOVER with nobody on the other end is not a handover. */
+export const CREATE_TASK_NEEDS_ASSIGNEE =
+  'create_task has to be FOR somebody: send `assignee` as the handle of a real agent, e.g. "mcp-core". A task ' +
+  'addressed to nobody reaches nobody — call list_agents to see who exists and what each one does.'
+
+export const REGISTER_NEEDS_FIELDS =
+  'register_agent needs at least one of `title`, `role`, `active` — describing yourself is the point of it. To only ' +
+  'say "I am alive", any ordinary call already does that.'
+
+/** Worded as the collector words them, so the same mistake reads the same through either server. */
+export const BAD_TITLE_MESSAGE = `bad_title: "title" must be a short human name (up to ${MAX_AGENT_TITLE_LEN} characters), e.g. "MCP-ядро".`
+export const BAD_ROLE_MESSAGE = `bad_role: "role" must say in one or two sentences (up to ${MAX_AGENT_ROLE_LEN} characters) what this agent DOES and answers for — it is what another agent reads before addressing work to it.`
+
 // ── tool descriptions ───────────────────────────────────────────────────────────────────────────────────────
+
+export const WHOAMI_DOC = [
+  'WHO THIS SERVER WRITES AS: the identity your tickets, comments and status changes are signed with, where that',
+  'identity came from, which board you are pinned to, and what the roster says about you.',
+  '',
+  'Call it once at the start of a session, before you introduce yourself in a thread. If `source` is "fallback" you',
+  'have no identity of your own — the writes are signed with the BOARD\'s name, which is how threads ended up signed',
+  '"erental" and "photoking agents" instead of by an agent, and how two agents on one board become one voice.',
+  '',
+  '`registered` says whether you are on the roster and `roster.role` what it says you do. An agent nobody can look up',
+  'is an agent nobody addresses work to — register_agent fixes that. `warnings` and `next` say what to do about it.',
+].join('\n')
+
+export const LIST_AGENTS_DOC = [
+  'WHO EXISTS on this board and what each of them does. CALL THIS BEFORE ADDRESSING A TASK (create_task, assign_task):',
+  'it is the only way to learn which handle is the right receiver, and an address that is not on the roster is refused.',
+  '',
+  'Each entry: `handle` — exactly what goes in `assignee`; `title` and `role` — what that agent is responsible for,',
+  'READ IT rather than guessing from the handle; `lastSeen` — a long-silent agent may never pick the work up;',
+  '`active` — false means retired, it takes no new work; `boards` — where it works.',
+  '',
+  'An agent appears here the first time it writes under a declared identity, and describes itself with register_agent.',
+  'A handle that is in old tickets but not here is a leftover board name, not an agent — do not address work to it.',
+].join('\n')
+
+export const REGISTER_AGENT_DOC = [
+  'Put YOURSELF on the roster and say what you do — the roster is meant to be filled by the agents themselves,',
+  'not by hand. Do it once, early; repeat it when your responsibility changes.',
+  '',
+  '`role` is the half that matters: it is the sentence another agent reads before deciding whether a task is yours.',
+  'Write what you are responsible for and what you do not touch.',
+  '',
+  'You can only ever write your OWN entry — there is no parameter naming another agent, and that is the enforcement.',
+  'Correcting somebody else\'s entry is the owner\'s job, on the dashboard. Fields you leave out keep their current',
+  'value, so registering again cannot blank a role you already wrote.',
+].join('\n')
 
 export const SET_STATUS_DOC = [
   'Move one ticket along the lifecycle. WHO you are decides what you may set, so pass `agent`.',
@@ -125,6 +339,10 @@ export const CREATE_TASK_DOC = [
   '`body` — the instruction itself (what is wrong now, where, what counts as done); `links` — absolute http(s)',
   'links to the screen, PR or spec. The first link becomes the ticket\'s page URL, so the executor\'s work report',
   'has something to point at.',
+  '',
+  'ADDRESS IT TO A REAL AGENT: `assignee` is checked against the roster, and an unknown handle comes back refused',
+  'with the roster attached rather than filed where nobody will see it. Call list_agents first and read the roles —',
+  'the handle alone does not tell you whose job this is.',
 ].join('\n')
 
 /** The remote shim cannot create with the read key alone — see remote.ts. Appended there, not here, because it
@@ -141,6 +359,9 @@ export const ASSIGN_TASK_DOC = [
   'This changes nothing else. It does not move the status and it posts nothing to the thread, so say WHY you are',
   'handing it over with add_comment — otherwise the receiver gets a ticket and no reason. Assigning also does not',
   'make you the filer: whoever created the ticket keeps the final word on it.',
+  '',
+  'The new assignee must be on the roster (list_agents); an unknown or retired handle is refused with the roster',
+  'attached, because a ticket handed to a name nobody answers to is a ticket nobody works.',
 ].join('\n')
 
 export const MY_TASKS_DOC = [

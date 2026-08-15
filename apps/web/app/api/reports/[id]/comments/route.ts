@@ -1,15 +1,17 @@
 import { NextResponse } from 'next/server'
-import { repo, normalizeVerifyUrl, normalizeSteps, IDENTITY_OWNER } from '@th/db'
+import { repo, normalizeIdentity, normalizeVerifyUrl, normalizeSteps, resolveSpeaker, IDENTITY_OWNER } from '@th/db'
 import { isAuthed } from '@/lib/auth'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 const MAX_BODY = 4000
+// The dashboard's own label for the human in the thread — a display name, never an identity.
+const OWNER_DISPLAY_NAME = 'Вы'
 
 // The comment thread on a ticket. Two authorized callers, mirroring the rest of the API:
-//   • Agent — `?projectKey=<read_key>`; may read and post ONLY on reports in its own project. Its comments are
-//     attributed to that project, so it is always clear which agent said what.
+//   • Agent — `?projectKey=<read_key>`; may read and post ONLY on reports in its own project. It signs the comment
+//     with `agent`; without one the project name still stands in, which is what pre-identity clients get.
 //   • Human — the dashboard cookie; may read and post anywhere, and delete.
 async function resolve(req: Request, id: string) {
   const projectKey = new URL(req.url).searchParams.get('projectKey') || ''
@@ -22,10 +24,10 @@ async function resolve(req: Request, id: string) {
     if (report.projectId !== project.id) {
       return { error: NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 }) }
     }
-    return { author: project.name, kind: 'agent' as const, report }
+    return { project, kind: 'agent' as const, report }
   }
   if (!(await isAuthed())) return { error: NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 }) }
-  return { author: 'Вы', kind: 'human' as const, report }
+  return { project: null, kind: 'human' as const, report }
 }
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -60,13 +62,21 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     )
   }
 
-  const comment = repo.addComment({ reportId: r.report.id, author: r.author, authorKind: r.kind, body: text, verifyUrl, verifySteps })
+  // WHO is talking. An agent that signs its comment is the author of that comment and joins the roster by it; one
+  // that does not still posts under the board's name, exactly as before — but that name does NOT become an agent,
+  // because a thread signed "erental" is a board talking to itself and no reader can tell two agents apart in it.
+  const speaker = r.project
+    ? resolveSpeaker(body.agent, normalizeIdentity(r.project.name) ?? r.project.id)
+    : { identity: IDENTITY_OWNER, rosterHandle: IDENTITY_OWNER }
+  if (speaker.rosterHandle) repo.touchAgent(speaker.rosterHandle, r.report.projectId)
+
+  const author = r.kind === 'agent' ? speaker.identity : OWNER_DISPLAY_NAME
+  const comment = repo.addComment({ reportId: r.report.id, author, authorKind: r.kind, body: text, verifyUrl, verifySteps })
   // Journalled so the other side notices without polling the whole board — this is how an agent learns the
-  // reporter answered it.
-  // The journal records the source, and the owner's source is IDENTITY_OWNER — the same string the status route
-  // writes, so an agent filtering the journal by actor sees one owner, not two.
-  repo.logEvent({ projectId: r.report.projectId, reportId: r.report.id, kind: 'comment', actor: r.kind === 'agent' ? r.author : IDENTITY_OWNER, detail: text.slice(0, 200) })
-  return NextResponse.json({ ok: true, comment })
+  // reporter answered it. The journal records the identity, not the display name, so an agent filtering by actor
+  // sees one owner and one handle per agent.
+  repo.logEvent({ projectId: r.report.projectId, reportId: r.report.id, kind: 'comment', actor: speaker.identity, detail: text.slice(0, 200) })
+  return NextResponse.json({ ok: true, comment, agent: r.kind === 'agent' ? speaker.identity : null })
 }
 
 // Deleting a comment is the human's call only — an agent must not be able to erase the record.

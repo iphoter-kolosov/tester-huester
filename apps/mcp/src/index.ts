@@ -3,7 +3,10 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod'
 import {
   repo,
+  checkAssignee,
   checkStatusTransition,
+  normalizeAgentRole,
+  normalizeAgentTitle,
   normalizeIdentity,
   normalizeVerifyUrl,
   normalizeSteps,
@@ -15,17 +18,27 @@ import {
 import {
   ACK_AGENT_DOC,
   ACK_UPDATES_DOC,
+  AGENT_ACTIVE_DOC,
   AGENT_DOC,
+  AGENT_ROLE_DOC,
+  AGENT_TITLE_DOC,
   ASSIGNEE_DOC,
   ASSIGN_TASK_DOC,
+  BAD_ROLE_MESSAGE,
+  BAD_TITLE_MESSAGE,
   COMMENT_DOC,
   CREATE_TASK_DOC,
+  CREATE_TASK_NEEDS_ASSIGNEE,
   DEFAULT_SEVERITY,
   DEFAULT_TYPE,
   EVIDENCE_DOC,
   FILTER,
   GET_UPDATES_DOC,
+  LIST_AGENTS_DOC,
   MY_TASKS_DOC,
+  REGISTER_AGENT_DOC,
+  REGISTER_NEEDS_FIELDS,
+  REGISTER_NEEDS_IDENTITY,
   SET_STATUS_DOC,
   SEVERITY,
   SINCE_DOC,
@@ -36,11 +49,18 @@ import {
   VERIFY_STEPS_DOC,
   VERIFY_URL_DOC,
   WAIT_FOR_UPDATES_DOC,
+  WHOAMI_DOC,
   buildPlate,
   checkLinks,
   composeTaskNote,
+  describeSelf,
+  registeredAnswer,
+  resolveActing,
+  rosterAnswer,
   taskFiled,
   taskReporter,
+  thAgentUnsetWarning,
+  type ActingIdentity,
 } from './contract.ts'
 import { buildRepro } from '../../web/lib/repro.ts'
 
@@ -58,8 +78,9 @@ import { buildRepro } from '../../web/lib/repro.ts'
 //   SQLITE_FILE     the database file (defaults to the repo root th.db)
 //   TH_PROJECT_KEY  pins every tool to ONE project (accepts the read_key OR the ingest_key). Unset → all
 //                   projects, with a warning; fine for a single-tenant local demo.
-//   TH_AGENT        (optional) the identity this server acts under; per-call `agent` overrides it. Unset, writes
-//                   are attributed to the project name — which is what this server has always shown them as.
+//   TH_AGENT        the identity this server acts under, and its entry on the roster; per-call `agent` overrides
+//                   it. Unset, writes are signed with the PROJECT NAME — see the warning printed at startup and
+//                   whoami. Still optional: refusing to start would take a running agent offline over a name.
 
 const RAW_KEY = process.env.TH_PROJECT_KEY || ''
 const scoped = RAW_KEY ? repo.getProjectByReadKey(RAW_KEY) ?? repo.getProjectByKey(RAW_KEY) : null
@@ -81,17 +102,40 @@ const ENV_IDENTITY = normalizeIdentity(process.env.TH_AGENT)
  *  this server has always written into the thread in that case. */
 const UNSCOPED_IDENTITY = 'agent'
 
+/** The name a write is signed with when nobody declared one — the board's, which is precisely the fallback whoami
+ *  and the startup warning exist to make visible. */
+function boardIdentity(): string {
+  if (!scoped) return UNSCOPED_IDENTITY
+  return normalizeIdentity(scoped.name) ?? scoped.id
+}
+
 /**
  * Who this call is FROM. Same chain as the HTTP route's actor (declared → configured → project name → project
  * id), so a status set through MCP and one set through REST are attributed to the same agent and land in the same
  * inbox. The identity is canonical, which is also why the comment thread now shows it lowercased: one identity,
  * not a display name here and a key there.
  */
+function acting(agent: string | undefined): ActingIdentity {
+  return resolveActing(agent, ENV_IDENTITY, boardIdentity())
+}
+
+/** Reads do not need to know where the name came from; writes do. */
 function actingIdentity(agent: string | undefined): string {
-  const declared = normalizeIdentity(agent) ?? ENV_IDENTITY
-  if (declared) return declared
-  if (!scoped) return UNSCOPED_IDENTITY
-  return normalizeIdentity(scoped.name) ?? scoped.id
+  return acting(agent).identity
+}
+
+/**
+ * Resolve who is writing AND record that it acted — the local twin of what every write route on the collector
+ * does, and it runs BEFORE the request is judged: an agent that declared a name has acted whatever the verdict,
+ * and registering first is what lets it address a ticket to itself on its very first call.
+ *
+ * `rosterHandle` is null when nothing was declared, and nothing is registered in that case: putting the board's own
+ * name on the roster is how "erental" and "photoking agents" came to look like agents.
+ */
+function signWrite(agent: string | undefined): ActingIdentity {
+  const who = acting(agent)
+  if (who.rosterHandle) repo.touchAgent(who.rosterHandle, scopeId)
+  return who
 }
 
 // Tools that need ONE project (they read the per-project cursor, or have to file into a single board) rather than
@@ -182,7 +226,76 @@ function cursorIdentity(identity: string, filters: UpdateFilter[]): string | nul
   return filters.length ? identity : null
 }
 
-const server = new McpServer({ name: 'tester-huester', version: '0.2.0' })
+const server = new McpServer({ name: 'tester-huester', version: '0.3.0' })
+
+server.tool(
+  'whoami',
+  WHOAMI_DOC,
+  { agent: z.string().optional().describe(`${AGENT_DOC} Pass it here to ask what WOULD be used for a call made under that name.`) },
+  async ({ agent }) => {
+    const who = acting(agent)
+    // The key being rejected is the difference between "this board" and "no board at all", and it would otherwise
+    // show up only as an empty answer from every other tool.
+    const extraWarnings = keyRejected ? [needsProject('whoami')!] : []
+    return say(
+      JSON.stringify(
+        describeSelf({
+          acting: who,
+          board: scoped ? { id: scoped.id, name: scoped.name } : null,
+          profile: repo.getAgent(who.identity),
+          extraWarnings,
+        }),
+        null,
+        2,
+      ),
+    )
+  },
+)
+
+server.tool(
+  'list_agents',
+  LIST_AGENTS_DOC,
+  {
+    activeOnly: z.boolean().optional().describe('Leave out retired entries — the ones that take no new work.'),
+    thisBoardOnly: z
+      .boolean()
+      .optional()
+      .describe('Only agents that have already worked THIS board. Off by default: a handle is one agent everywhere, and the one you need may simply not have touched this board yet.'),
+  },
+  async ({ activeOnly, thisBoardOnly }) => {
+    if (keyRejected) return say(needsProject('list_agents')!)
+    const board = thisBoardOnly ? scopeId ?? undefined : undefined
+    return say(JSON.stringify(rosterAnswer(repo.listAgents({ activeOnly, board })), null, 2))
+  },
+)
+
+server.tool(
+  'register_agent',
+  REGISTER_AGENT_DOC,
+  {
+    title: z.string().min(1).max(200).optional().describe(AGENT_TITLE_DOC),
+    role: z.string().min(1).max(1000).optional().describe(AGENT_ROLE_DOC),
+    active: z.boolean().optional().describe(AGENT_ACTIVE_DOC),
+    agent: z.string().optional().describe(AGENT_DOC),
+  },
+  async ({ title, role, active, agent }) => {
+    if (keyRejected) return say(needsProject('register_agent')!)
+    const who = acting(agent)
+    if (!who.rosterHandle) return say(REGISTER_NEEDS_IDENTITY)
+    if (title === undefined && role === undefined && active === undefined) return say(REGISTER_NEEDS_FIELDS)
+    // Validated here rather than left to the storage layer: upsertAgent stores what normalises to nothing as an
+    // empty column, so an agent that sent a title of spaces would silently ERASE the one it had.
+    if (title !== undefined && !normalizeAgentTitle(title)) return say(BAD_TITLE_MESSAGE)
+    if (role !== undefined && !normalizeAgentRole(role)) return say(BAD_ROLE_MESSAGE)
+    repo.upsertAgent({ handle: who.rosterHandle, title, role, active, board: scopeId })
+    // Describing yourself is also an act, so the liveness stamp moves — and the row is read back afterwards to
+    // answer with the stamp the board will actually show, not the one from a moment before.
+    repo.touchAgent(who.rosterHandle, scopeId)
+    const profile = repo.getAgent(who.rosterHandle)
+    if (!profile) return say(`register_agent: "${who.rosterHandle}" was written but cannot be read back — the roster table is not answering.`)
+    return say(JSON.stringify(registeredAnswer(profile), null, 2))
+  },
+)
 
 server.tool(
   'list_reports',
@@ -275,6 +388,9 @@ server.tool(
     const refuse = needsProject('ack_updates')
     if (refuse || !scopeId) return say(refuse ?? 'ack_updates needs TH_PROJECT_KEY')
     const reader = normalizeIdentity(agent)
+    // A named ack is the cheapest honest sign that an agent is still running — it read the board and finished the
+    // work. An unnamed one says nothing about anybody, so it registers nobody.
+    if (reader) repo.touchAgent(reader, scopeId)
     return say(`cursor → ${repo.setCursor(scopeId, cursor, reader)}${reader ? ` (for "${reader}")` : ''}`)
   },
 )
@@ -294,7 +410,7 @@ server.tool(
     if (!owned(r)) return say(`no report ${id}`)
     const url = normalizeVerifyUrl(verifyUrl)
     if (verifyUrl && !url) return say('verifyUrl must be an absolute http(s) link')
-    const author = actingIdentity(agent)
+    const author = signWrite(agent).identity
     const c = repo.addComment({ reportId: r.id, author, authorKind: 'agent', body, verifyUrl: url, verifySteps: normalizeSteps(verifySteps) })
     repo.logEvent({ projectId: r.projectId, reportId: r.id, kind: 'comment', actor: author, detail: body.slice(0, 200) })
     return say(`comment added to ${id} as "${author}" (${c.id})`)
@@ -325,7 +441,7 @@ server.tool(
     evidence: z.string().min(1).max(2000).optional().describe(`${EVIDENCE_DOC} Required for needs_review.`),
   },
   async ({ id, status, agent, comment, verifyUrl, verifySteps, evidence }) =>
-    say(applyStatus(id, status, { comment, verifyUrl, verifySteps, evidence }, actingIdentity(agent))),
+    say(applyStatus(id, status, { comment, verifyUrl, verifySteps, evidence }, signWrite(agent).identity)),
 )
 
 server.tool(
@@ -340,7 +456,7 @@ server.tool(
     agent: z.string().optional().describe(AGENT_DOC),
   },
   async ({ id, comment, verifyUrl, verifySteps, evidence, agent }) =>
-    say(applyStatus(id, STATUS_NEEDS_REVIEW, { comment, verifyUrl, verifySteps, evidence }, actingIdentity(agent))),
+    say(applyStatus(id, STATUS_NEEDS_REVIEW, { comment, verifyUrl, verifySteps, evidence }, signWrite(agent).identity)),
 )
 
 server.tool(
@@ -354,14 +470,13 @@ server.tool(
   async ({ id, assignee, agent }) => {
     const r = repo.resolveReport(id)
     if (!owned(r)) return say(`no report ${id}`)
-    const to = assignee === null ? null : normalizeIdentity(assignee)
-    // An assignee that normalises to nothing is not "unassign" — that is what null is for. Refusing here keeps a
-    // typo from quietly detaching a ticket from the agent who was supposed to get it.
-    if (assignee !== null && !to) {
-      return say('assignee must be a short identity like "mcp-core" — send null (not an empty string) to clear it.')
-    }
+    const actor = signWrite(agent).identity
+    // Judged against the roster, and only AFTER the caller is on it, so an agent may hand a ticket to itself on its
+    // first call. A typo is refused WITH the roster rather than quietly detaching the ticket from whoever needed it.
+    const decision = checkAssignee(assignee, repo.listAgents())
+    if (!decision.ok) return say(`${decision.err.error}: ${decision.err.message}`)
+    const to = decision.assignee
     if (!repo.setAssignee(r.id, to)) return say(`no report ${id}`)
-    const actor = actingIdentity(agent)
     repo.logEvent({
       projectId: r.projectId,
       reportId: r.id,
@@ -388,11 +503,15 @@ server.tool(
   async ({ assignee, title, body, type, severity, links, agent }) => {
     const refuse = needsProject('create_task')
     if (refuse || !scopeId) return say(refuse ?? 'create_task needs TH_PROJECT_KEY')
+    const creator = signWrite(agent).identity
     const to = normalizeIdentity(assignee)
-    if (!to) return say('assignee must be a short identity like "mcp-core" — the task has to be FOR somebody.')
+    if (!to) return say(CREATE_TASK_NEEDS_ASSIGNEE)
+    // The roster check runs after the filer is on the roster, so filing a task for yourself works on the first
+    // call; the refusal carries the roster, which is the one moment the caller is actually asking who exists.
+    const decision = checkAssignee(to, repo.listAgents())
+    if (!decision.ok) return say(`${decision.err.error}: ${decision.err.message}`)
     const checked = checkLinks(links)
     if (!checked.ok) return say(checked.message)
-    const creator = actingIdentity(agent)
     const note = composeTaskNote(title, body, checked.links)
 
     const row = repo.createReport({
@@ -431,5 +550,8 @@ server.tool(
 const transport = new StdioServerTransport()
 await server.connect(transport)
 console.error(
-  `tester-huester MCP server ready (stdio)${scoped ? ` — scoped to "${scoped.name}"` : ''}${ENV_IDENTITY ? ` as "${ENV_IDENTITY}"` : ''}`,
+  `tester-huester MCP server ready (stdio)${scoped ? ` — scoped to "${scoped.name}"` : ''}` +
+    `${ENV_IDENTITY ? ` as "${ENV_IDENTITY}"` : ` as "${boardIdentity()}" (the board's own name — TH_AGENT is unset)`}`,
 )
+// Loud, and after the ready line so it is the last thing in the log rather than the first thing scrolled past.
+if (!ENV_IDENTITY) console.error(thAgentUnsetWarning('[mcp]'))

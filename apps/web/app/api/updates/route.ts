@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { repo, normalizeIdentity, UPDATE_FILTERS, type ChangeEvent, type UpdateFilter } from '@th/db'
 import { resolveProjectKey } from '@/lib/projectKey'
+import { participantsOf } from '@/lib/roster'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -83,6 +84,9 @@ export async function GET(req: Request) {
     }
   }
 
+  // Who the `actor` on each event is. Without it the journal reads as a list of bare handles — the state that made
+  // the owner ask for roles in the first place.
+  const participants = participantsOf(out.events.map((e) => e.actor))
   return NextResponse.json({
     ok: true,
     project: project.name,
@@ -93,6 +97,8 @@ export async function GET(req: Request) {
     filter: parsed.filters,
     count: out.events.length,
     events: out.events,
+    agents: participants.agents,
+    unknownParticipants: participants.unknown,
   })
 }
 
@@ -111,5 +117,9 @@ export async function POST(req: Request) {
   // Ack under the same identity the read was made under, or the agent advances a position it is not the one
   // reading from. The query string is accepted too, so the ack looks like the GET it belongs to.
   const agent = normalizeIdentity(body.agent) ?? normalizeIdentity(new URL(req.url).searchParams.get('agent'))
+  // An ack is the cheapest honest liveness signal there is: the agent named itself and moved its own position, so
+  // it is running right now. There is no fallback here — an unnamed ack moves the shared project cursor and says
+  // nothing about who did it, so it registers nobody.
+  if (agent) repo.touchAgent(agent, r.project.id)
   return NextResponse.json({ ok: true, agent, cursor: repo.setCursor(r.project.id, seq, agent) })
 }

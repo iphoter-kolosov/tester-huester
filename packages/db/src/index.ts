@@ -1,8 +1,17 @@
 export { repo, ensureSchema, MAX_ATTACHMENTS, normalizeAttachments, UPDATE_FILTERS } from './db'
-export type { Project, Report, NewReport, ReportType, Severity, Attachment, UpdateFilter } from './db'
+export type { Project, Report, NewReport, ReportType, Severity, Attachment, UpdateFilter, AgentProfile } from './db'
 export {
   checkAgentStatusClaim,
+  checkAssignee,
   checkStatusTransition,
+  describeRoster,
+  normalizeAgentRole,
+  normalizeAgentTitle,
+  resolveSpeaker,
+  MAX_AGENT_ROLE_LEN,
+  MAX_AGENT_TITLE_LEN,
+  SEEDED_AGENTS,
+  LEGACY_ACTOR_HUMAN,
   canonicalStatus,
   statusQueryTargets,
   normalizeVerifyUrl,
@@ -24,5 +33,8 @@ export {
   MAX_IDENTITY_LEN,
   MAX_URL_LEN,
 } from './verify'
-export type { Verification, VerifyError, Status, Actor, ActorKind, TicketFacts, StatusDecision } from './verify'
+export type {
+  Verification, VerifyError, Status, Actor, ActorKind, TicketFacts, StatusDecision,
+  AssigneeDecision, RosterEntry, Speaker,
+} from './verify'
 export type { Comment, AuthorKind, ChangeEvent, EventKind } from './db'

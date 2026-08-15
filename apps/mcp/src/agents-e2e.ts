@@ -39,14 +39,88 @@ function connect(entry: string, env: Record<string, string>): Promise<Client> {
   return client.connect(transport).then(() => client)
 }
 
-const local = await connect('index.ts', { SQLITE_FILE: dbFile, TH_PROJECT_KEY: project.readKey })
+// TH_AGENT is blanked rather than inherited: whether this server has an identity of its own is the thing under
+// test below, and an operator with TH_AGENT set in their shell would otherwise silently change the answer.
+const local = await connect('index.ts', { SQLITE_FILE: dbFile, TH_PROJECT_KEY: project.readKey, TH_AGENT: '' })
 
 const call = async (name: string, args: Record<string, unknown>): Promise<string> => {
   const res = await local.callTool({ name, arguments: args })
   return (res.content as Array<{ type: string; text: string }>)[0]!.text
 }
 
+type WhoAmIAnswer = {
+  identity: string
+  source: string
+  registered: boolean
+  roster: { role: string; active: boolean } | null
+  board: { name: string } | null
+  warnings: string[]
+  next: string[]
+}
+const whoami = async (args: Record<string, unknown> = {}): Promise<WhoAmIAnswer> =>
+  JSON.parse(await call('whoami', args)) as WhoAmIAnswer
+
+// ── an agent can say who it is, and is told when it has no name of its own ──────────────────────────────────
+const anonymous = await whoami()
+assert.equal(anonymous.source, 'fallback', 'with nothing declared the identity is a fallback, and says so')
+assert.equal(anonymous.identity, 'agents-e2e', 'and the fallback is the BOARD name — the defect made visible')
+assert.equal(anonymous.board?.name, 'agents-e2e', 'whoami names the board it is pinned to')
+assert.ok(anonymous.warnings.some((w) => w.includes('TH_AGENT')), 'the fallback is warned about, not just reported')
+assert.ok(anonymous.next.some((n) => n.includes('list_agents')), 'and it is told to read the roster before addressing work')
+
+const declared = await whoami({ agent: FILER })
+assert.equal(declared.source, 'declared', 'a declared identity is reported as declared')
+assert.equal(declared.registered, false, 'and it is not on the roster until it acts or registers')
+
+// ── the roster starts with the two participants that exist before any agent ─────────────────────────────────
+type Roster = { count: number; agents: { handle: string; role: string; active: boolean }[] }
+const seeded = JSON.parse(await call('list_agents', {})) as Roster
+assert.deepEqual(seeded.agents.map((a) => a.handle).sort(), ['extension', 'owner'], 'owner and extension are seeded')
+assert.ok(
+  seeded.agents.every((a) => a.role.length > 0),
+  'both seeded entries describe themselves — a reader of a thread never meets a bare handle',
+)
+
+// ── agents put themselves on the roster ─────────────────────────────────────────────────────────────────────
+const registered = JSON.parse(
+  await call('register_agent', { agent: EXECUTOR, title: 'Исполнитель', role: 'Чинит витрину; в админку не лезет.' }),
+) as { agent: { handle: string; role: string; boards: string[] } }
+assert.equal(registered.agent.handle, EXECUTOR)
+assert.match(registered.agent.role, /Чинит витрину/, 'the role is stored as written')
+assert.deepEqual(registered.agent.boards, [project.id], 'and the agent is recorded as working THIS board')
+
+assert.match(
+  await call('register_agent', { agent: EXECUTOR, active: true }),
+  /Чинит витрину/,
+  'registering again without a role does not blank the one already written',
+)
+assert.match(await call('register_agent', { agent: EXECUTOR }), /at least one of/, 'a register that describes nothing is refused')
+assert.match(await call('register_agent', { agent: EXECUTOR, title: '   ' }), /^bad_title/, 'a blank title would erase the real one, so it is refused')
+assert.match(
+  await call('register_agent', {}),
+  /TH_AGENT/,
+  'a server with no identity of its own cannot register: putting the BOARD on the roster is the defect being fixed',
+)
+assert.equal(repo.getAgent('agents-e2e'), null, 'and the board name never became an agent')
+
+assert.match(await call('register_agent', { agent: FILER, role: 'Ставит задачи и принимает работу.' }), /Ставит задачи/)
+
+const roster = JSON.parse(await call('list_agents', { activeOnly: true })) as Roster
+assert.ok(roster.agents.some((a) => a.handle === EXECUTOR), 'the executor is now addressable')
+assert.ok(!roster.agents.some((a) => a.handle === 'extension'), 'the retired capture channel is not offered as one')
+
 // ── an agent files work for another agent ───────────────────────────────────────────────────────────────────
+const typo = await call('create_task', { assignee: 'executor-agnet', title: 'x', body: 'y', agent: FILER })
+assert.match(typo, /^unknown_assignee/, 'a task addressed to a handle nobody answers to is refused')
+assert.match(typo, /executor-agent/, 'and the refusal carries the roster, so the caller learns the board in one round trip')
+assert.ok(!typo.includes('extension'), 'the retired entry is not offered — taking the suggestion would earn a second refusal')
+assert.equal(repo.listReports({ projectId: project.id }).length, 0, 'nothing was filed into the void')
+
+assert.match(
+  await call('create_task', { assignee: 'extension', title: 'x', body: 'y', agent: FILER }),
+  /^assignee_inactive/,
+  'a retired entry is refused as an addressee, and said to be retired rather than unknown',
+)
 const filed = await call('create_task', {
   assignee: EXECUTOR,
   title: 'Кнопка «Проверить» не открывает экран',
@@ -122,9 +196,24 @@ assert.ok(rework.count >= 1, 'the rejection comes back to whoever held the ticke
 assert.match(await call('set_status', { id, status: 'verified', agent: FILER }), /→ verified/, 'the filer accepts')
 
 // ── handover and back-compatibility ─────────────────────────────────────────────────────────────────────────
+const strangerHandover = await call('assign_task', { id, assignee: THIRD, agent: FILER })
+assert.match(strangerHandover, /^unknown_assignee/, 'work cannot be handed to an agent that is not on the roster')
+assert.equal(repo.getReport(id)!.assignee, EXECUTOR, 'and the refused handover left the ticket where it was')
+
+// An agent joins the roster by ACTING under a declared identity — no registration call needed, which is what lets
+// it take work on its very first call and address a ticket to itself.
+assert.match(await call('add_comment', { id, body: 'Беру на себя.', agent: THIRD }), /as "third-agent"/)
+assert.equal(repo.getAgent(THIRD)?.handle, THIRD, 'the comment alone put the third agent on the roster')
+assert.equal(repo.getAgent(THIRD)?.role, '', 'described by nobody yet — which whoami and the roster both say out loud')
+const newcomer = JSON.parse(await call('whoami', { agent: THIRD })) as WhoAmIAnswer
+assert.equal(newcomer.registered, true)
+assert.ok(newcomer.warnings.some((w) => w.includes('register_agent')), 'and it is told to describe itself')
+
 assert.match(await call('assign_task', { id, assignee: THIRD, agent: FILER }), /is now for "third-agent"/)
 assert.equal(repo.getReport(id)!.assignee, THIRD)
-assert.match(await call('assign_task', { id, assignee: '   ', agent: FILER }), /send null/, 'a blank assignee is not "unassign"')
+const blank = await call('assign_task', { id, assignee: '   ', agent: FILER })
+assert.match(blank, /^bad_assignee/, 'a blank assignee is not "unassign"')
+assert.match(blank, /Send null/, 'and it is told what "unassign" actually is')
 assert.equal(repo.getReport(id)!.assignee, THIRD, 'and it did not detach the ticket')
 
 // A client written before the lifecycle existed still works, under exactly the contract it was written against.
@@ -136,6 +225,20 @@ assert.match(
   /→ needs_review/,
   "'fixed' from an agent still lands in needs_review on the old two-part contract",
 )
+
+// Everything above included calls with no identity at all (the legacy pair). Not one of them may have put the
+// board on the roster: that is precisely how "erental" and "photoking agents" came to look like agents.
+assert.equal(repo.getAgent('agents-e2e'), null, 'no unnamed call ever registered the board as an agent')
+
+// ── TH_AGENT is a real identity, and the server says which one it is using ──────────────────────────────────
+const configured = await connect('index.ts', { SQLITE_FILE: dbFile, TH_PROJECT_KEY: project.readKey, TH_AGENT: 'Env-Agent' })
+const envWho = JSON.parse(
+  ((await configured.callTool({ name: 'whoami', arguments: {} })).content as Array<{ text: string }>)[0]!.text,
+) as WhoAmIAnswer
+assert.equal(envWho.source, 'env', 'a configured identity is reported as coming from the environment')
+assert.equal(envWho.identity, 'env-agent', 'and it is canonicalised, so it matches what the writes are stored as')
+assert.ok(!envWho.warnings.some((w) => w.includes('TH_AGENT')), 'a server that HAS an identity is not nagged about it')
+await configured.close()
 
 // ── one surface, two servers ────────────────────────────────────────────────────────────────────────────────
 const remote = await connect('remote.ts', { TH_COLLECTOR: 'http://127.0.0.1:9', TH_PROJECT_KEY: 'thr_unused_in_this_check' })

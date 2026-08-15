@@ -10,7 +10,8 @@
     "start": "tsx src/index.ts",
     "remote": "tsx src/remote.ts",
     "smoke": "tsx src/smoke.ts",
-    "agents-e2e": "tsx src/agents-e2e.ts"
+    "agents-e2e": "tsx src/agents-e2e.ts",
+    "remote-e2e": "tsx --tsconfig ../web/tsconfig.json src/remote-e2e.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.13.0",

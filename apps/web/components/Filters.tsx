@@ -18,11 +18,14 @@ const TYPES: Opt[] = [
 export default function Filters({
   sites,
   projects,
+  agents,
   archivedCount,
   views,
 }: {
   sites: Opt[]
   projects: Opt[]
+  // Whose work this is: every handle that files, is addressed or holds anything on this tab, busiest first.
+  agents: Opt[]
   archivedCount: number
   views: ViewCounts
 }) {
@@ -43,7 +46,13 @@ export default function Filters({
     router.push(p.toString() ? `/?${p}` : '/')
   }
 
-  const hasFilter = !!(cur('site') || cur('type') || cur('status') || cur('project') || view)
+  const hasFilter = !!(cur('site') || cur('type') || cur('status') || cur('project') || cur('agent') || view)
+
+  // A handle that has nothing on THIS tab is still appended when it is the selection: a control reading «Любой
+  // агент» while the board is cut down to one agent is the one thing a filter must never do.
+  const pickedAgent = cur('agent')
+  const agentOpts: Opt[] =
+    pickedAgent && !agents.some((a) => a.value === pickedAgent) ? [...agents, { value: pickedAgent, label: `${pickedAgent} (0)` }] : agents
 
   return (
     <div className="bar">
@@ -80,6 +89,12 @@ export default function Filters({
             {projects.map((p) => <option key={p.value} value={p.value}>{p.label}</option>)}
           </select>
         )}
+        {agentOpts.length > 0 && (
+          <select className="fc" value={pickedAgent} onChange={(e) => go({ agent: e.target.value })} title="Чья это работа: поставил, адресовано ему или держит">
+            <option value="">Любой агент</option>
+            {agentOpts.map((a) => <option key={a.value} value={a.value}>{a.label}</option>)}
+          </select>
+        )}
         <select className="fc" value={cur('type')} onChange={(e) => go({ type: e.target.value })}>
           <option value="">Любой тип</option>
           {TYPES.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
@@ -93,7 +108,7 @@ export default function Filters({
           <option value="old">Сначала старые</option>
         </select>
         {(hasFilter || cur('sort')) && (
-          <button className="fclear" onClick={() => go({ site: '', type: '', status: '', project: '', view: '', sort: '' })}>Сбросить</button>
+          <button className="fclear" onClick={() => go({ site: '', type: '', status: '', project: '', agent: '', view: '', sort: '' })}>Сбросить</button>
         )}
       </div>
     </div>

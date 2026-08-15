@@ -14,7 +14,12 @@ import Verdict from '@/components/Verdict'
 import ReproContext from '@/components/ReproContext'
 import ReplayPlayer from '@/components/ReplayPlayer'
 import VideoPlayer from '@/components/VideoPlayer'
+import { rosterMap } from '@/components/agents'
+import { participantsOf } from '@/lib/roster'
 import { isAuthed } from '@/lib/auth'
+
+// Comments written by the owner carry a display name, not an identity, so they are never looked up on the roster.
+const AGENT_VOICE = 'agent'
 
 export const dynamic = 'force-dynamic'
 
@@ -28,6 +33,15 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
   // Pin the newest work report at the top: when a ticket comes back for review, the first thing its reader needs
   // is what was done and where to look — not a scroll through the thread.
   const check = repo.latestVerification(r.id)
+  // Every voice on this page in one lookup: the three addressing slots plus whoever spoke in the thread.
+  const roster = rosterMap(
+    participantsOf([
+      r.creator,
+      r.assignee,
+      r.takenBy,
+      ...comments.filter((c) => c.authorKind === AGENT_VOICE).map((c) => c.author),
+    ]).agents,
+  )
   return (
     <main className="wrap">
       <Link className="back" href="/">← все тикеты</Link>
@@ -38,7 +52,7 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
         </span>
       </div>
 
-      <Addressing creator={r.creator} reporter={r.reporter} assignee={r.assignee} takenBy={r.takenBy} takenAt={r.takenAt} />
+      <Addressing creator={r.creator} reporter={r.reporter} assignee={r.assignee} takenBy={r.takenBy} takenAt={r.takenAt} roster={roster} detailed />
 
       <div className="dctl">
         <RowControls id={r.id} type={r.type} severity={r.severity} status={r.status} projectId={r.projectId} projects={projOpts} archived={r.archived} />
@@ -68,7 +82,7 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
         <span className="k">Created</span><span>{new Date(r.createdAt).toLocaleString()}</span>
         <span className="k">ID</span><span style={{ color: 'var(--muted)' }}><CopyId id={r.shortId} /> · {r.id}</span>
       </div>
-      <CommentThread reportId={r.id} comments={comments} />
+      <CommentThread reportId={r.id} comments={comments} roster={roster} />
 
       {r.context ? <ReproContext context={r.context as ReproBundle} /> : null}
       {r.videoUrl ? <VideoPlayer url={r.videoUrl} seconds={r.videoSeconds} trim={r.videoTrim} /> : r.replayUrl ? <ReplayPlayer url={r.replayUrl} /> : null}

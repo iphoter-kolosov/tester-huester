@@ -7,6 +7,8 @@ import Filters from '@/components/Filters'
 import RowControls from '@/components/RowControls'
 import CopyId from '@/components/CopyId'
 import Addressing from '@/components/Addressing'
+import { agentName, rosterMap, type RosterMap } from '@/components/agents'
+import { participantsOf } from '@/lib/roster'
 import {
   BOARD_VIEWS,
   VIEW_ADDRESSED,
@@ -84,16 +86,24 @@ const VIEW_MATCH: Record<BoardView, (r: Report) => boolean> = {
 }
 const inView = (r: Report, view: BoardView): boolean => VIEW_MATCH[view](r)
 
+// "Чья это работа" — one question, three ways a handle can be attached to a ticket. Splitting the filter into
+// three controls would make the owner pick a relationship before he knows there is one; what he actually wants is
+// everything this agent has anything to do with.
+const touches = (r: Report, handle: string): boolean =>
+  r.creator === handle || r.assignee === handle || r.takenBy === handle
+
+const identitiesOf = (r: Report): (string | null)[] => [r.creator, r.assignee, r.takenBy]
+
 export default async function Home({
   searchParams,
 }: {
-  searchParams: Promise<{ site?: string; type?: string; status?: string; sort?: string; project?: string; arch?: string; view?: string }>
+  searchParams: Promise<{ site?: string; type?: string; status?: string; sort?: string; project?: string; arch?: string; view?: string; agent?: string }>
 }) {
   if (!(await isAuthed())) redirect('/login')
   const sp = await searchParams
   const arch = sp.arch === '1'
   const view = asBoardView(sp.view)
-  const f = { site: sp.site || '', type: sp.type || '', status: sp.status || '', project: sp.project || '', sort: sp.sort === 'old' ? 'old' : 'new' }
+  const f = { site: sp.site || '', type: sp.type || '', status: sp.status || '', project: sp.project || '', agent: sp.agent || '', sort: sp.sort === 'old' ? 'old' : 'new' }
 
   const projects = repo.listProjects()
   const projName = new Map(projects.map((p) => [p.id, p.name] as const))
@@ -107,6 +117,21 @@ export default async function Home({
   const siteList = [...siteCounts.keys()].sort((a, b) => (siteCounts.get(b)! - siteCounts.get(a)!) || a.localeCompare(b))
   const siteOpts = siteList.map((s) => ({ value: s, label: `${s} (${siteCounts.get(s)})` }))
 
+  // Who these tickets belong to, with the roster attached so a row says a name instead of a handle. Built from the
+  // handles actually present in this tab: an agent that has never touched a ticket would only ever select an empty
+  // board, and a legacy board name that HAS touched hundreds must stay selectable — it is where the work is.
+  const participants = participantsOf(all.flatMap(identitiesOf))
+  const roster: RosterMap = rosterMap(participants.agents)
+  const agentCounts = new Map<string, number>()
+  for (const r of all) for (const h of new Set(identitiesOf(r).filter((h): h is string => !!h))) agentCounts.set(h, (agentCounts.get(h) ?? 0) + 1)
+  const unknownAgents = new Set(participants.unknown)
+  const agentOpts = [...agentCounts.keys()]
+    .sort((a, b) => (agentCounts.get(b)! - agentCounts.get(a)!) || a.localeCompare(b))
+    .map((h) => ({
+      value: h,
+      label: `${agentName(h, roster)} (${agentCounts.get(h)})${unknownAgents.has(h) ? ' · не в составе' : ''}`,
+    }))
+
   // Counted over the whole tab, not over the current filter: a queue that says "0" only because a site filter is
   // on would be a lie about how much work is waiting.
   const viewCounts = Object.fromEntries(
@@ -119,9 +144,10 @@ export default async function Home({
     // A bookmarked ?status=fixed still means something: the core maps a legacy name onto the rows it became.
     (!f.status || statusQueryTargets(f.status).includes(r.status)) &&
     (!f.project || r.projectId === f.project) &&
+    (!f.agent || touches(r, f.agent)) &&
     (!view || inView(r, view))
   const shown = all.filter(matches)
-  const hasFilter = !!(f.site || f.type || f.status || f.project || view)
+  const hasFilter = !!(f.site || f.type || f.status || f.project || f.agent || view)
 
   // Group visible notes BY SITE; order notes within a group by the chosen sort; float the freshest site up.
   const bySite = new Map<string, Report[]>()
@@ -148,6 +174,10 @@ export default async function Home({
           {shown.length}
           {hasFilter ? ` / ${all.length}` : ''} {arch ? 'в архиве' : 'тикетов'} · {siteList.length} сайтов
         </span>
+        {/* The whole roster, not just the handles on this tab: the link has to say how many agents EXIST. */}
+        <Link className="hnav" href="/agents" title="Кто работает эту доску, чем занимается и когда был на связи">
+          Состав<span className="hnavn">{repo.listAgents().length}</span>
+        </Link>
       </div>
 
       <div className="keys">
@@ -175,7 +205,7 @@ export default async function Home({
         </form>
       </div>
 
-      <Filters sites={siteOpts} projects={projOpts} archivedCount={archivedCount} views={viewCounts} />
+      <Filters sites={siteOpts} projects={projOpts} agents={agentOpts} archivedCount={archivedCount} views={viewCounts} />
 
       {all.length === 0 && (
         <div className="empty">
@@ -222,7 +252,7 @@ export default async function Home({
                     {r.pageUrl && <a href={r.pageUrl} target="_blank" rel="noreferrer">{r.pageUrl}</a>}
                     {r.viewport && <span>{r.viewport}</span>}
                   </div>
-                  <Addressing creator={r.creator} reporter={r.reporter} assignee={r.assignee} takenBy={r.takenBy} takenAt={r.takenAt} />
+                  <Addressing creator={r.creator} reporter={r.reporter} assignee={r.assignee} takenBy={r.takenBy} takenAt={r.takenAt} roster={roster} />
                   {badges.length ? (
                     <div className="badges">
                       {badges.map((b) => (

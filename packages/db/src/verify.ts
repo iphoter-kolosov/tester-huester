@@ -64,6 +64,38 @@ function stripControlChars(s: string): string {
 export const IDENTITY_OWNER = 'owner'
 /** The source recorded for a capture that arrived through the extension without declaring who filed it. */
 export const IDENTITY_EXTENSION = 'extension'
+/**
+ * What the journal called the owner before he had a canonical identity. Kept as a named constant because the
+ * live events table still holds rows written under it, and a bare 'human' in a migration is unreadable.
+ */
+export const LEGACY_ACTOR_HUMAN = 'human'
+
+/**
+ * The two participants that exist before any agent registers, seeded into the roster so a reader of a thread is
+ * never left staring at a bare handle. The owner is a roster row like everybody else — he files tasks, comments
+ * and passes the final verdict, which is exactly what a roster is for describing; making him a special case would
+ * mean the one voice with the most authority is the one nobody can look up.
+ *
+ * Russian, because these lines are read on the owner's dashboard.
+ */
+export const SEEDED_AGENTS: readonly { handle: string; title: string; role: string; active: boolean }[] = [
+  {
+    handle: IDENTITY_OWNER,
+    title: 'Владелец доски',
+    role:
+      'Хозяин проекта: ставит задачи, снимает баги расширением и выносит окончательное решение по любому ' +
+      'тикету — принять работу или вернуть на доработку. Его слово выше правил ролей.',
+    active: true,
+  },
+  {
+    handle: IDENTITY_EXTENSION,
+    title: 'Расширение браузера',
+    role:
+      'Не агент, а канал: так на доску попадают снимки экрана и записи, снятые вручную. Работу ему поручать ' +
+      'нельзя — отвечать за неё будет тот, кому тикет назначат.',
+    active: false,
+  },
+]
 
 /**
  * Fold an identity to its canonical form: lowercase, single-spaced, no control characters, capped.
@@ -86,6 +118,149 @@ export function normalizeIdentity(v: unknown): string | null {
 /** Both sides must actually exist: an unknown creator is not "everybody's ticket". */
 export function sameIdentity(a: string | null | undefined, b: string | null | undefined): boolean {
   return !!a && !!b && a === b
+}
+
+// ── who is speaking, and whether that name is a claim or a guess ─────────────────────────────────────────────
+
+/**
+ * The two answers every identified write needs, which used to be one and were therefore wrong half the time.
+ *
+ * `identity` is what the write is ATTRIBUTED to — the journal actor, the comment author, `taken_by`. It is never
+ * empty, because a row that says nothing about who wrote it is worse than a row that says "the board did".
+ *
+ * `rosterHandle` is what may be written into the ROSTER, and it is null whenever the identity was inferred rather
+ * than declared. That gap is the whole point: a client that never set an identity is attributed to the board it
+ * works on, and registering THAT string as an agent is how the roster filled up with "erental", "huester",
+ * "photoking agents" — board names wearing an agent's face, under which two real agents merge into one
+ * indistinguishable voice. A guess is good enough to sign a row; it is not good enough to enter a directory that
+ * other agents will address work to.
+ */
+export type Speaker = { identity: string; rosterHandle: string | null }
+
+/**
+ * @param declared what the caller said its identity is (`agent` on the request) — anything, it is validated here
+ * @param fallback what to attribute the write to when nothing was declared, already canonical (the board's name)
+ */
+export function resolveSpeaker(declared: unknown, fallback: string): Speaker {
+  const own = normalizeIdentity(declared)
+  if (own) return { identity: own, rosterHandle: own }
+  return { identity: fallback, rosterHandle: null }
+}
+
+// ── the roster: who these handles ARE ───────────────────────────────────────────────────────────────────────
+
+export const MAX_AGENT_TITLE_LEN = 120
+export const MAX_AGENT_ROLE_LEN = 600
+
+/**
+ * The part of a roster row this module needs to judge an address. The storage layer's full row (boards, activity)
+ * satisfies it structurally, so nothing has to be mapped on the way in — and this module stays free of any
+ * dependency on the database, which is what lets it remain the single validator both transports call.
+ */
+export type RosterEntry = { handle: string; title: string; role: string; active: boolean }
+
+/** Beyond this the error stops being a directory and starts being a wall of text. */
+const MAX_ROSTER_IN_ERROR = 25
+
+const ROSTER_REGISTER_HINT =
+  'An agent joins the roster the first time it acts under a declared identity (send "agent" on any write), and ' +
+  'describes itself with POST /api/agents {agent, title, role}.'
+
+const noRoleYet = (e: RosterEntry): string =>
+  e.role || 'has not described itself yet — it should POST /api/agents with a title and a role'
+
+/** The roster as a caller should read it: who exists, what to call them, and what each one is responsible for. */
+export function describeRoster(roster: RosterEntry[]): string {
+  if (!roster.length) return `The roster is empty — nobody has registered yet. ${ROSTER_REGISTER_HINT}`
+  const shown = roster.slice(0, MAX_ROSTER_IN_ERROR)
+  const lines = shown.map((e) => `  • ${e.handle}${e.title ? ` (${e.title})` : ''} — ${noRoleYet(e)}`)
+  const rest = roster.length - shown.length
+  if (rest > 0) lines.push(`  • …and ${rest} more — GET /api/agents for the whole roster.`)
+  return lines.join('\n')
+}
+
+/**
+ * The roster as an answer to "whom CAN I address", which is the only question a rejected address is asking. Only
+ * the active entries are offered — listing a retired one here would earn the caller a second refusal for taking
+ * the suggestion — and the retired ones are counted rather than hidden, so nobody concludes they vanished.
+ */
+function describeAddressable(roster: RosterEntry[]): string {
+  const active = roster.filter((e) => e.active)
+  const retired = roster.length - active.length
+  const tail = retired > 0 ? `\n  (${retired} more on the roster are retired and take no work — GET /api/agents to see them.)` : ''
+  return describeRoster(active) + tail
+}
+
+export type AssigneeDecision = { ok: true; assignee: string | null } | { ok: false; err: VerifyError }
+
+/**
+ * Validate whom a ticket is being addressed to, against the roster of agents that actually exist.
+ *
+ * Why a refusal rather than a stored string: `assignee` was filled on zero tickets out of ~370. The mechanism was
+ * never broken — an agent about to hand work over simply had no way to learn who was there to receive it, so it
+ * addressed nobody. An unknown handle that is quietly accepted produces a ticket nobody will ever see; an unknown
+ * handle that comes back WITH the roster attached teaches the caller the board in one round trip, which is the
+ * only moment it is actually asking the question.
+ *
+ * `null` and `''` are not errors — a ticket is allowed to go back to being unaddressed.
+ */
+export function checkAssignee(raw: unknown, roster: RosterEntry[]): AssigneeDecision {
+  if (raw == null || raw === '') return { ok: true, assignee: null }
+  const wanted = normalizeIdentity(raw)
+  if (!wanted) {
+    return {
+      ok: false,
+      err: {
+        error: 'bad_assignee',
+        message:
+          'assignee must be a short identity like "mcp-core" — the handle of the agent the ticket is FOR. Send null to leave it unaddressed.\n' +
+          describeAddressable(roster),
+      },
+    }
+  }
+  const found = roster.find((e) => e.handle === wanted)
+  if (!found) {
+    return {
+      ok: false,
+      err: {
+        error: 'unknown_assignee',
+        message:
+          `No agent "${wanted}" is on this board's roster, so nothing was addressed to it — a ticket handed to a name nobody answers to is a ticket nobody works.\n` +
+          `${describeAddressable(roster)}\n` +
+          ROSTER_REGISTER_HINT,
+      },
+    }
+  }
+  if (!found.active) {
+    return {
+      ok: false,
+      err: {
+        error: 'assignee_inactive',
+        message:
+          `"${wanted}"${found.title ? ` (${found.title})` : ''} is on the roster but marked inactive — it is not taking work, so a ticket addressed to it would sit unread.\n` +
+          `Still active:\n${describeRoster(roster.filter((e) => e.active))}`,
+      },
+    }
+  }
+  return { ok: true, assignee: wanted }
+}
+
+/** The human name shown next to a handle. Empty means "not stated" and is stored as such — never invented. */
+export function normalizeAgentTitle(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const s = stripControlChars(v).trim().replace(/\s+/g, ' ').slice(0, MAX_AGENT_TITLE_LEN).trim()
+  return s || null
+}
+
+/**
+ * What the agent DOES and is responsible for — the sentence another agent reads before addressing it. Line breaks
+ * go with the other control characters: the roster is rendered one line per agent, in error messages an agent has
+ * to parse, and a role that can break that layout can hide the entry underneath it.
+ */
+export function normalizeAgentRole(v: unknown): string | null {
+  if (typeof v !== 'string') return null
+  const s = stripControlChars(v).trim().slice(0, MAX_AGENT_ROLE_LEN).trim()
+  return s || null
 }
 
 // ── statuses ────────────────────────────────────────────────────────────────────────────────────────────────

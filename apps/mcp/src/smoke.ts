@@ -17,6 +17,25 @@ await client.connect(transport)
 const tools = await client.listTools()
 console.log('TOOLS:', tools.tools.map((t) => t.name).join(', '))
 
+// The identity half of the surface, read-only on purpose: this runs against the REAL database, and registering a
+// smoke-test agent would leave a fake colleague on the roster for everyone else to address work to.
+const me = await client.callTool({ name: 'whoami', arguments: {} })
+const who = JSON.parse((me.content as Array<{ type: string; text: string }>)[0]!.text) as {
+  identity: string
+  source: string
+  registered: boolean
+  warnings: string[]
+}
+console.log(`whoami: "${who.identity}" (source: ${who.source}, on the roster: ${who.registered})`)
+for (const w of who.warnings) console.log('  ! ' + w)
+
+const rosterText = (
+  (await client.callTool({ name: 'list_agents', arguments: {} })).content as Array<{ type: string; text: string }>
+)[0]!.text
+const roster = JSON.parse(rosterText) as { count: number; agents: Array<{ handle: string; role: string }> }
+console.log(`list_agents: ${roster.count} on the roster`)
+for (const a of roster.agents) console.log(`  • ${a.handle} — ${a.role || '(no role yet)'}`)
+
 const list = await client.callTool({ name: 'list_reports', arguments: { limit: 20 } })
 const text = (list.content as Array<{ type: string; text: string }>)[0]!.text
 const rows = JSON.parse(text) as Array<{ id: string; note: string; context: unknown }>

@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import VerifyBlock from './VerifyBlock'
+import { AgentRef, NOBODY_FILED, type RosterMap } from './agents'
 
 export type CommentView = {
   id: string; author: string; authorKind: string; body: string; createdAt: number
@@ -66,7 +67,17 @@ function ago(ms: number): string {
 // The ticket's conversation: the dev agent reports back here (what it fixed, what it couldn't reproduce) and
 // the reporter answers in the same place. The agent posts through MCP/REST scoped to its project; this is the
 // human half of the same thread.
-export default function CommentThread({ reportId, comments }: { reportId: string; comments: CommentView[] }) {
+export default function CommentThread({
+  reportId,
+  comments,
+  roster,
+}: {
+  reportId: string
+  comments: CommentView[]
+  // Who the agent bylines in this thread ARE. Without it a reader sees a bare handle and has no way to tell a
+  // reviewer from a builder — the whole reason the thread was hard to read.
+  roster: RosterMap
+}) {
   const router = useRouter()
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
@@ -138,7 +149,15 @@ export default function CommentThread({ reportId, comments }: { reportId: string
       {comments.map((c) => (
         <div className={'cmt' + (c.authorKind === 'agent' ? ' cmt-agent' : '')} key={c.id}>
           <div className="cmthead">
-            <span className="cmtwho">{c.authorKind === 'agent' ? '🤖' : '👤'} {c.author}</span>
+            {/* An agent byline is a roster reference — name, handle, what it is for. A human byline is a display
+                name ('Вы'), not an identity, so it is deliberately NOT looked up. */}
+            <span className="cmtwho">
+              {c.authorKind === 'agent' ? (
+                <>🤖 <AgentRef handle={c.author} roster={roster} nobody={NOBODY_FILED} showRole /></>
+              ) : (
+                <>👤 {c.author}</>
+              )}
+            </span>
             <span className="cmtwhen">{ago(c.createdAt)}</span>
             <button className="cmtdel" onClick={() => remove(c.id)} disabled={busy} title="Удалить">✕</button>
           </div>

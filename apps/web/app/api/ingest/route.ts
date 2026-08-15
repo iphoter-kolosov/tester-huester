@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { NextResponse } from 'next/server'
-import { repo, MAX_ATTACHMENTS, normalizeIdentity, IDENTITY_EXTENSION, type Attachment, type ReportType, type Severity } from '@th/db'
+import { repo, checkAssignee, resolveSpeaker, MAX_ATTACHMENTS, IDENTITY_EXTENSION, type Attachment, type ReportType, type Severity } from '@th/db'
 import { storage } from '@/lib/storage'
 
 export const runtime = 'nodejs'
@@ -109,6 +109,23 @@ export async function POST(req: Request) {
     if (target) targetProjectId = target.id
   }
 
+  // WHO filed this, as a structured identity, and who it is FOR. An agent filing a ticket for another agent
+  // declares both; the extension declares neither, and a capture with no declared filer is the extension's own —
+  // which is the truth, and is what the journal records instead of the flat "extension" it used to claim for
+  // every row regardless of origin.
+  const filer = resolveSpeaker(body.creator, IDENTITY_EXTENSION)
+  const creator = filer.identity
+  // Registered before the address is judged, so an agent filing its first task is already on the roster and may
+  // address the ticket back to itself.
+  if (filer.rosterHandle) repo.touchAgent(filer.rosterHandle, targetProjectId)
+
+  // Refused rather than dropped, and refused HERE — before any screenshot, video or replay is written to storage,
+  // so a misaddressed task costs nothing. This is the moment an agent is actually asking "who is there to take
+  // this", and answering it with the roster is what turns addressing from a field nobody filled into a habit.
+  const addressed = checkAssignee(body.assignee, repo.listAgents())
+  if (!addressed.ok) return NextResponse.json({ ok: false, ...addressed.err }, { status: 400, headers: CORS })
+  const assignee = addressed.assignee
+
   let screenshotUrl: string | null = null
   const shot = body.screenshot
   if (typeof shot === 'string' && shot.startsWith('data:image/')) {
@@ -211,13 +228,6 @@ export async function POST(req: Request) {
       attachments: attachments.length,
     })
   }
-
-  // WHO filed this, as a structured identity, and who it is FOR. An agent filing a ticket for another agent
-  // declares both; the extension declares neither, and a capture with no declared filer is the extension's own —
-  // which is the truth, and is what the journal records instead of the flat "extension" it used to claim for
-  // every row regardless of origin.
-  const creator = normalizeIdentity(body.creator) ?? IDENTITY_EXTENSION
-  const assignee = normalizeIdentity(body.assignee)
 
   const row = repo.createReport({
     projectId: targetProjectId,
