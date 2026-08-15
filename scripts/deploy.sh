@@ -26,11 +26,11 @@ $SSH 'cd ~/tester-huester && docker compose up -d --build' 2>&1 | tail -25
 # and a wait that cries wolf is worse than no wait at all.
 echo "== wait for ready (forces the lazy migration) =="
 for i in $(seq 1 100); do
-  # No `|| echo 000`: curl -w already prints 000 on a refused connection, so the fallback appended a SECOND
-  # 000 and the guard below compared "000000" != "000" -> true -> the loop exited on its first pass. That is
-  # the real reason every deploy reported "health: 000" while the server was fine.
-  code=$($SSH 'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4319/api/agents' 2>/dev/null)
-  code=${code:-000}
+  # `set -e` kills the script on a non-zero exit, so the assignment MUST carry its own fallback — but as
+  # `|| code=000`, not `|| echo 000`: the echo APPENDED a second 000 to the one curl already prints, and
+  # the guard then compared "000000" != "000" -> true -> the loop exited on its first pass. One form
+  # crashes the script, the other silently skips the wait. Both looked like "health: 000".
+  code=$($SSH 'curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4319/api/agents' 2>/dev/null) || code=000
   [ "$code" != "000" ] && break
   sleep 3
 done
