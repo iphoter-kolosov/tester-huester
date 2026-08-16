@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { repo, type Project } from '@th/db'
+import { repo, IDENTITY_EXTENSION, type AgentProfile, type Project } from '@th/db'
 import { isAuthed } from '@/lib/auth'
 
 export const runtime = 'nodejs'
@@ -18,6 +18,36 @@ export function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS })
 }
 
+/** What the overlay needs to render one option: a person, not a slug. `role` is the hover text. */
+type AssignableAgent = { handle: string; title: string; role: string }
+
+/**
+ * Who a capture may be addressed to, and on which board each of them belongs.
+ *
+ * The extension holds an INGEST key, and GET /api/agents takes a READ key or the owner cookie — so the roster is
+ * answered HERE, on the one call the overlay already makes. One round trip, no second credential in the browser,
+ * and the picker can repopulate the instant the project changes without touching the network again.
+ *
+ * Assignable = active AND not the extension channel itself. `active: false` already hides the channel (that is how
+ * it is kept from being given work), but the exclusion is written out anyway: this is the endpoint the extension
+ * asks "whom can I hand this to", and offering the extension its own handle would be nonsense even if somebody
+ * flipped that flag by hand.
+ *
+ * An agent that has never worked ANY board (`boards` empty) is offered on every board, after the ones that belong
+ * to it. The roster is global and checkAssignee — the validator this picker has to agree with — does not look at
+ * boards at all, so hiding such an agent would have the picker refuse a handle the server accepts. Ordering, not
+ * exclusion, is what says "these are the regulars here".
+ */
+function assignableByProject(projects: Project[]): { agents: AssignableAgent[]; assignable: Record<string, string[]> } {
+  const roster: AgentProfile[] = repo.listAgents({ activeOnly: true }).filter((a) => a.handle !== IDENTITY_EXTENSION)
+  const boardless = roster.filter((a) => !a.boards.length)
+  const assignable: Record<string, string[]> = {}
+  for (const p of projects) {
+    assignable[p.id] = [...roster.filter((a) => a.boards.includes(p.id)), ...boardless].map((a) => a.handle)
+  }
+  return { agents: roster.map(({ handle, title, role }) => ({ handle, title, role })), assignable }
+}
+
 export function GET(req: Request) {
   const url = new URL(req.url)
   const key = url.searchParams.get('ingestKey') || req.headers.get('x-ingest-key') || ''
@@ -27,8 +57,15 @@ export function GET(req: Request) {
   }
   // id+name only — never the keys. `defaultId` = the project this ingest key belongs to, so the overlay can
   // preselect it. The overlay sends the chosen id back as `projectId` on ingest.
-  const projects = repo.listProjects().map((p) => ({ id: p.id, name: p.name }))
-  return NextResponse.json({ ok: true, projects, defaultId: own.id }, { headers: CORS })
+  //
+  // `agents` is a dictionary and each project carries only HANDLES into it: a role runs to several hundred
+  // characters and most agents work several boards, so embedding the profiles per project would ship the same
+  // paragraphs over and over. The client resolves a handle through the dictionary; the decision of who is
+  // assignable where stays entirely on this side.
+  const rows = repo.listProjects()
+  const { agents, assignable } = assignableByProject(rows)
+  const projects = rows.map((p) => ({ id: p.id, name: p.name, assignable: assignable[p.id]! }))
+  return NextResponse.json({ ok: true, projects, agents, defaultId: own.id }, { headers: CORS })
 }
 
 /** Two boards whose names differ only by case or padding are one board to a human — matching that way is what

@@ -21,6 +21,9 @@ export type ReportPayload = {
   userAgent: string
   context?: ReproBundle
   projectId?: string // overlay project picker — routes the report to this project (else the ingest key's own)
+  // Overlay ИСПОЛНИТЕЛЬ picker — the handle the ticket is FOR. Absent means unaddressed, which is a legitimate
+  // capture: /api/ingest treats null and a missing field alike and only refuses a handle it cannot honour.
+  assignee?: string
 }
 
 export function buildReport(o: {
@@ -35,6 +38,7 @@ export function buildReport(o: {
   userAgent: string
   context?: ReproBundle | null
   projectId?: string | null
+  assignee?: string | null
 }): ReportPayload {
   return {
     ingestKey: o.ingestKey,
@@ -47,5 +51,6 @@ export function buildReport(o: {
     userAgent: o.userAgent,
     context: o.context ?? undefined,
     projectId: o.projectId || undefined,
+    assignee: o.assignee || undefined,
   }
 }

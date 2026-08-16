@@ -89,8 +89,10 @@
       .seg.sev button.on[data-v="med"] { background: #a16207; }
       .seg.sev button.on[data-v="high"] { background: #c2410c; }
       .seg.sev button.on[data-v="crit"] { background: #b91c1c; }
-      .psel { width: 100%; height: 30px; padding: 0 9px; border: 1px solid #223049; background: #0f1626; color: #e6edf7; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
-      .psel:hover { border-color: #38bdf8; }
+      .psel, .asel { width: 100%; height: 30px; padding: 0 9px; border: 1px solid #223049; background: #0f1626; color: #e6edf7; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
+      .psel:hover, .asel:not(:disabled):hover { border-color: #38bdf8; }
+      /* disabled = nobody to address on this board, or the roster never arrived; the option text says which */
+      .asel:disabled { color: #8ea0bd; cursor: default; font-weight: 600; }
 
       /* video block */
       .vid { display: flex; flex-direction: column; gap: 6px; padding: 8px 9px; border: 1px solid #223049; border-radius: 10px; background: #0f1626; }
@@ -103,7 +105,9 @@
       .ghost { background: transparent; border: 1px solid #223049; color: #e6edf7; }
       .ghost:hover:not(:disabled) { border-color: #38bdf8; }
       .ghost.danger:hover:not(:disabled) { border-color: #ef4444; color: #fca5a5; }
-      .msg { color: #8ea0bd; font-size: 12px; line-height: 1.3; min-height: 15px; }
+      /* pre-line: a server refusal arrives as several lines (it carries the roster) and is worth reading whole;
+         the cap keeps it from pushing the Send button out of the rail */
+      .msg { color: #8ea0bd; font-size: 12px; line-height: 1.3; min-height: 15px; white-space: pre-line; max-height: 160px; overflow-y: auto; }
       .msg.err { color: #ff6b6b; }
       .msg.warn { color: #fbbf24; }
       .msg.ok { color: #34d399; }
@@ -224,6 +228,13 @@
             <div class="grp">
               <span class="grpttl">Проект</span>
               <select class="psel"><option value="">по умолчанию</option></select>
+            </div>
+
+            <div class="grp">
+              <span class="grpttl">Исполнитель</span>
+              <!-- Filled from the same /api/projects answer as the board above; disabled until it arrives, so an
+                   empty list never looks like a broken control. -->
+              <select class="asel" disabled><option value="">— никому (разберёт владелец)</option></select>
             </div>
 
             <div class="grp">

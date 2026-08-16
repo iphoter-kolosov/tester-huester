@@ -44,6 +44,11 @@ export type Draft = {
   type: ReportType
   severity: Severity
   projectId: string | null
+  // The handle chosen in the ИСПОЛНИТЕЛЬ picker, or null for "nobody — the owner will sort it out", which is
+  // both the default and the honest state of most captures. Persisted next to projectId because the two are one
+  // decision (an addressee belongs to the board the ticket goes to) and losing half of it to a reload would send
+  // the ticket somewhere the reporter never chose.
+  assignee: string | null
   // The backdrop WITHOUT markup — markup lives in `prims` so both can be restored independently (a crop
   // replaces the backdrop; re-loading the original screenshot would silently undo it).
   shot: DraftShot | null
@@ -70,6 +75,7 @@ function blank(origin: string): Draft {
     type: 'bug',
     severity: 'med',
     projectId: null,
+    assignee: null,
     shot: null,
     prims: [],
     attachments: [],

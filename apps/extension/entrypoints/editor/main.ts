@@ -17,6 +17,7 @@ import {
   type Draft, type DraftAttachment, type DraftVideo,
 } from '@/lib/draft'
 import { ICON_RECT, ICON_ARROW, ICON_ELLIPSE, ICON_PENCIL, ICON_CROP, ICON_TEXT, ICON_ERASER, TOOL_CURSORS, TOOL_LABELS } from '@/lib/glyphs'
+import { assignableOn, assigneeOptionsHtml, keepAssignee, type ProjectsAnswer } from '@/lib/roster'
 
 // The collector stores at most this many attachments per report (MAX_ATTACHMENTS in @th/db). Refusing the
 // eleventh here, out loud, beats letting the tester annotate one the server would silently drop.
@@ -81,6 +82,7 @@ const toolsRow = q<HTMLElement>('.tools')
 const typeSeg = q<HTMLElement>('.seg.type')
 const sevSeg = q<HTMLElement>('.seg.sev')
 const psel = q<HTMLSelectElement>('.psel')
+const asel = q<HTMLSelectElement>('.asel')
 const recBtn = q<HTMLButtonElement>('.rec')
 const vdropBtn = q<HTMLButtonElement>('.vdrop')
 const vidSt = q<HTMLElement>('.vidst')
@@ -108,6 +110,11 @@ let activeDims = '' // canvas size of the selected item — the only outside sig
 let type: ReportType = 'bug'
 let severity: Severity = 'med'
 let projectId: string | null = null
+// Whom the ticket is FOR; null — nobody, which stays the default here exactly as it is in the page overlay.
+let assignee: string | null = null
+// The roster answer, kept so switching the board rebuilds the addressee list without another request.
+let projects: ProjectsAnswer = {}
+let projectsLoaded = false
 let video: DraftVideo | null = null
 let context: ReproBundle | null = null
 // True while an item is being put on screen: the annotator fires onChange during that, and autosaving
@@ -161,6 +168,7 @@ function persist(patch: Partial<Draft> = {}, immediate = true): void {
     type,
     severity,
     projectId,
+    assignee,
     shot: main.base ? { dataUrl: main.base } : null,
     prims: main.prims as unknown[],
     attachments: toDraftAttachments(),
@@ -588,8 +596,23 @@ sevSeg.addEventListener('click', (e) => {
 psel.addEventListener('change', () => {
   projectId = psel.value || null
   if (projectId) void setConfig({ lastProjectId: projectId }) // remembered for the next report
+  renderAssignees()
   persist()
 })
+asel.addEventListener('change', () => {
+  // Not remembered the way lastProjectId is: the next capture starts unaddressed on purpose (see the overlay).
+  assignee = asel.value || null
+  persist()
+})
+
+// The addressee belongs to the board the ticket goes to, so the list is rebuilt whenever that board changes,
+// and a choice the new board cannot honour is dropped here rather than sent and refused.
+function renderAssignees(): void {
+  const agents = assignableOn(projects, projectId)
+  assignee = keepAssignee(assignee, agents)
+  asel.innerHTML = assigneeOptionsHtml(agents, assignee, projectsLoaded)
+  asel.disabled = !agents.length
+}
 
 note.addEventListener('input', () => persist({}, false)) // typing is the one change frequent enough to debounce
 capIn.addEventListener('input', () => {
@@ -897,6 +920,7 @@ async function send(): Promise<void> {
         } as ReproBundle)
       : null,
     projectId,
+    assignee,
   })
   if (!payload.note && !payload.screenshot && !attachments.length) {
     setMsg('Пусто: напишите заметку или добавьте кадр', 'err')
@@ -906,7 +930,7 @@ async function send(): Promise<void> {
   }
 
   setMsg('Отправляю…')
-  const res = await ask<{ ok?: boolean; id?: string; attachments?: number; error?: string }>({
+  const res = await ask<{ ok?: boolean; id?: string; attachments?: number; error?: string; message?: string }>({
     type: 'TH_SEND',
     collectorUrl: cfg.collectorUrl,
     payload: {
@@ -921,7 +945,9 @@ async function send(): Promise<void> {
 
   if (!res?.ok) {
     // Nothing is thrown away on a failure: the draft is intact and the window stays open with the reason.
-    setMsg('Не отправилось: ' + (res?.error || 'сервер не ответил') + '. Черновик цел — попробуйте ещё раз.', 'err')
+    // The server's `message` wins over the bare error code — a refused addressee comes back with the roster and
+    // with what to do about it, and that is the only text that says whom to pick instead.
+    setMsg('Не отправилось: ' + (res?.message || res?.error || 'сервер не ответил') + '\nЧерновик цел — попробуйте ещё раз.', 'err')
     sending = false
     sendBtn.disabled = false
     return
@@ -978,17 +1004,22 @@ async function readSeed(): Promise<Seed | null> {
 
 async function loadProjects(): Promise<void> {
   const cfg = await getConfig()
-  const res = await ask<{ ok?: boolean; projects?: { id: string; name: string }[]; defaultId?: string }>({
+  const res = await ask<ProjectsAnswer>({
     type: 'TH_PROJECTS',
     collectorUrl: cfg.collectorUrl,
     ingestKey: cfg.ingestKey,
   })
-  if (!res?.ok || !res.projects?.length) return
+  // A picker that quietly kept showing "никому" would hide the fact that the roster was never asked for, and
+  // the reporter would think he had chosen it — so the addressee list is rendered on this path too.
+  if (!res?.ok || !res.projects?.length) { renderAssignees(); return }
+  projects = res
+  projectsLoaded = true
   // Preference order: the draft's own choice → the project used last → the ingest key's own → the first.
   const fromDraft = projectId && res.projects.some((p) => p.id === projectId) ? projectId : ''
   const remembered = res.projects.some((p) => p.id === cfg.lastProjectId) ? cfg.lastProjectId : ''
   projectId = fromDraft || remembered || res.defaultId || res.projects[0]!.id
   psel.innerHTML = res.projects.map((p) => `<option value="${esc(p.id)}"${p.id === projectId ? ' selected' : ''}>${esc(p.name)}</option>`).join('')
+  renderAssignees()
 }
 
 function showRestored(d: Draft): void {
@@ -1039,6 +1070,7 @@ async function boot(): Promise<void> {
     type = draft.type
     severity = draft.severity
     projectId = draft.projectId
+    assignee = draft.assignee
     video = draft.video
     context = (draft.context as ReproBundle | null) ?? null
     if (draft.pageUrl && !pageUrl) pageUrl = draft.pageUrl

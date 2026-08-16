@@ -321,8 +321,10 @@ export default defineBackground(() => {
       return true
     }
     if (msg?.type === 'TH_PROJECTS') {
-      // The overlay's project picker: list the account's projects. Fetched from the background so it isn't
-      // subject to the page's CSP (same reason as TH_SEND).
+      // The overlay's taxonomy pickers in one call: the account's projects AND who may be addressed on each of
+      // them. Fetched from the background so it isn't subject to the page's CSP (same reason as TH_SEND), and
+      // answered by the ingest key the extension already holds — the roster endpoint wants a read key, which
+      // the extension has no business carrying. The whole answer is passed through untouched.
       const url = `${msg.collectorUrl}/api/projects?ingestKey=${encodeURIComponent(msg.ingestKey || '')}`
       fetch(url, { headers: { Accept: 'application/json' } })
         .then((r) => r.json())

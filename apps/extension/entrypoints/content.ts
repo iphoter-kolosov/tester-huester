@@ -4,6 +4,7 @@ import { getConfig, setConfig } from '@/lib/config'
 import { buildReport, type ReportType, type Severity } from '@/lib/report'
 import { requestBundle } from '@/lib/bridge'
 import { loadDraft, saveDraft, flushDrafts, clearDraft, hasContent, type Draft, type DraftVideo } from '@/lib/draft'
+import { assignableOn, assigneeOptionsHtml, keepAssignee, ASSIGNEE_NOBODY_LABEL, type ProjectsAnswer } from '@/lib/roster'
 import { ICON_RECT, ICON_ARROW, ICON_ELLIPSE, ICON_PENCIL, ICON_CROP, ICON_TEXT, ICON_ERASER, TOOL_CURSORS, TOOL_LABELS } from '@/lib/glyphs'
 import {
   startReplay, bindVisibility, snapshotReplay, startExplicitClip, stopExplicitClip, clipSeconds,
@@ -181,7 +182,7 @@ const CSS = `
 .side .seg { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
 .side .seg.sev { grid-template-columns: repeat(4, 1fr); }
 .side .seg button { height: 28px; padding: 0 4px; border-right: 1px solid #223049; border-bottom: 1px solid #223049; font-size: 11.5px; }
-.side .psel { width: 100%; max-width: 100%; }
+.side .psel, .side .asel { width: 100%; max-width: 100%; }
 .sidefoot { flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid #223049; }
 .sidefoot .btn { margin-left: 0; width: 100%; height: 38px; }
 .sidefoot .msg { min-height: 15px; line-height: 1.25; }
@@ -266,8 +267,10 @@ const CSS = `
 .seg.sev button.on[data-v="med"] { background: #a16207; }
 .seg.sev button.on[data-v="high"] { background: #c2410c; }
 .seg.sev button.on[data-v="crit"] { background: #b91c1c; }
-.psel { height: 30px; padding: 0 9px; border: 1px solid #223049; background: #0f1626; color: #e6edf7; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; max-width: 190px; }
-.psel:hover { border-color: #38bdf8; }
+.psel, .asel { height: 30px; padding: 0 9px; border: 1px solid #223049; background: #0f1626; color: #e6edf7; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; max-width: 190px; }
+.psel:hover, .asel:not(:disabled):hover { border-color: #38bdf8; }
+/* disabled = there is nobody to address on this board, or the roster never arrived. The option text says which. */
+.asel:disabled { color: #8ea0bd; cursor: default; font-weight: 600; }
 .khint { margin-left: auto; font-size: 11px; font-weight: 700; color: #8ea0bd; }
 .khint b { color: #38bdf8; font-weight: 800; }
 /* the comment box: full width under the canvas, a comfortable share of the height */
@@ -294,6 +297,9 @@ const CSS = `
 .msg.err { color: #ff6b6b; }
 .msg.warn { color: #fbbf24; }
 .msg.ok { color: #34d399; }
+/* a server refusal: keep its line breaks (the roster is a list) and cap the height so it cannot push the
+   Send button out of the panel */
+.msg.long { white-space: pre-line; max-height: 130px; overflow-y: auto; }
 .ctxhint { margin-left: auto; font-size: 11.5px; font-weight: 700; color: #8ea0bd; display: flex; gap: 6px; align-items: center; }
 .ctxhint b { color: #38bdf8; font-weight: 800; }
 .ctxhint .e { color: #fda4af; }
@@ -466,6 +472,10 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
               <span class="grpttl">Проект</span>
               <select class="psel"><option value="">по умолчанию</option></select>
             </div>
+            <div class="grp">
+              <span class="grpttl">Исполнитель</span>
+              <select class="asel" disabled><option value="">${ASSIGNEE_NOBODY_LABEL}</option></select>
+            </div>
             <div class="clip">
               <span class="clipq"></span>
               <span class="clipst"></span>
@@ -548,6 +558,7 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
   const tinInput = q<HTMLInputElement>('.tin input')
   const tmark = q<HTMLElement>('.tmark')
   const psel = q<HTMLSelectElement>('.psel')
+  const asel = q<HTMLSelectElement>('.asel')
   const recBtn = q<HTMLButtonElement>('.rec')
   const reshotBtn = q<HTMLButtonElement>('.reshot')
   const recstEl = q<HTMLElement>('.recst')
@@ -567,6 +578,13 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
   let type: ReportType = draft?.type ?? 'bug'
   let severity: Severity = draft?.severity ?? 'med'
   let projectId: string | null = draft?.projectId ?? null // chosen in the project picker; null → route by the ingest key
+  // Whom the ticket is FOR. null — nobody, and that stays the default: an unaddressed capture is a legitimate
+  // ticket, and it is most of them.
+  let assignee: string | null = draft?.assignee ?? null
+  // The whole roster answer, kept so changing the project repopulates the addressee list without a second
+  // request — the two pickers are one decision and must not be a round trip apart.
+  let projects: ProjectsAnswer = {}
+  let projectsLoaded = false
   let pendingText: { x: number; y: number } | null = null
   // True while the restored draft is being put back on screen. The annotator fires onChange during that, and
   // autosaving mid-restore would write an empty markup stack over the one we are in the middle of restoring.
@@ -589,6 +607,7 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
       type,
       severity,
       projectId,
+      assignee,
       prims: ann.getPrims(),
       video,
       context: context ?? null,
@@ -1473,11 +1492,21 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
   // Populate the project picker from the account's projects (fetched via background → collector), preselecting
   // the ingest key's own project. Choosing another routes the report there on send.
   const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
+  // The addressee list belongs to the board the ticket goes to, so it is rebuilt from the same answer whenever
+  // the project changes. A choice the new board cannot honour is dropped here rather than sent and refused.
+  function renderAssignees(): void {
+    const agents = assignableOn(projects, projectId)
+    assignee = keepAssignee(assignee, agents)
+    asel.innerHTML = assigneeOptionsHtml(agents, assignee, projectsLoaded)
+    asel.disabled = !agents.length
+  }
+
   getConfig()
     .then(async (cfg) => {
-      const res = (await chrome.runtime.sendMessage({ type: 'TH_PROJECTS', collectorUrl: cfg.collectorUrl, ingestKey: cfg.ingestKey })) as
-        { ok?: boolean; projects?: { id: string; name: string }[]; defaultId?: string }
+      const res = (await chrome.runtime.sendMessage({ type: 'TH_PROJECTS', collectorUrl: cfg.collectorUrl, ingestKey: cfg.ingestKey })) as ProjectsAnswer
       if (!res?.ok || !Array.isArray(res.projects) || !res.projects.length) return
+      projects = res
+      projectsLoaded = true
       // Preference order: the restored draft's own choice (the tester already decided where this report goes)
       // → the project used last (if it still exists) → the ingest key's own → the first one.
       const fromDraft = projectId && res.projects.some((p) => p.id === projectId) ? projectId : ''
@@ -1486,13 +1515,33 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
       psel.innerHTML = res.projects.map((p) => `<option value="${esc(p.id)}"${p.id === projectId ? ' selected' : ''}>${esc(p.name)}</option>`).join('')
     })
     .catch(() => {})
+    // Runs on every outcome, including the failures above: a picker that quietly kept showing "никому" would
+    // hide the fact that the roster was never asked for, and the reporter would think he had chosen it.
+    .finally(() => renderAssignees())
   psel.addEventListener('change', () => {
     projectId = psel.value || null
     if (projectId) void setConfig({ lastProjectId: projectId }) // remembered for the next report
+    renderAssignees()
+    persist()
+  })
+  asel.addEventListener('change', () => {
+    // Deliberately NOT remembered like lastProjectId: the next capture starts unaddressed, because "nobody" is
+    // the honest default for a fresh bug and a sticky addressee would quietly hand the next one to whoever
+    // happened to take the last.
+    assignee = asel.value || null
     persist()
   })
 
-  function setMsg(t: string, cls = '') { msg.textContent = t; msg.className = 'msg ' + cls }
+  function setMsg(t: string, cls = '') { msg.textContent = t; msg.className = 'msg ' + cls; msg.title = '' }
+
+  // A refusal from the collector is written to be read: several lines, often carrying the roster. Shown whole
+  // (the box scrolls) and duplicated into the tooltip, because a 232px column is not where anyone wants to read
+  // a paragraph — but truncating the one text that says how to fix the send would be worse.
+  function setFailure(text: string) {
+    msg.textContent = 'Не отправилось: ' + text + '\nЧерновик цел.'
+    msg.className = 'msg err long'
+    msg.title = text
+  }
 
   sendBtn.addEventListener('click', async () => {
     // This overlay cannot carry the attachments the editor window collected, so sending from here would file
@@ -1581,6 +1630,7 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
         },
       } as typeof context,
       projectId,
+      assignee,
     })
     if (!payload.note && !payload.screenshot) { setMsg('Add a note or a screenshot', 'err'); return }
     sendBtn.disabled = true
@@ -1623,9 +1673,15 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
         else if (replayGz || replayPayload) setMsg(`Отправлено ✓ (запись ${fmtDur(sel.trim ? sel.trim.to - sel.trim.from : spanOf(replay))})`, 'ok')
         else setMsg(attach ? 'Отправлено ✓ (без записи)' : 'Отправлено ✓ (запись не приложена — по вашему выбору)', 'ok')
         setTimeout(close, replayWarn ? 2600 : 1100)
-      } else { setMsg('Failed: ' + (res?.error || 'server error'), 'err'); sendBtn.disabled = false }
+      } else {
+        // The draft is untouched on a refusal — nothing typed is lost to a rejected field — and the server's own
+        // `message` wins over the error code: a refused addressee comes back WITH the roster and with what to do
+        // about it, and that text is the only thing that tells the reporter whom he could have picked instead.
+        setFailure(res?.message || res?.error || 'server error')
+        sendBtn.disabled = false
+      }
     } catch (e) {
-      setMsg('Failed: ' + String(e), 'err'); sendBtn.disabled = false
+      setFailure(String(e)); sendBtn.disabled = false
     }
   })
 }

@@ -39,7 +39,7 @@ const B = 'https://b.test'
 // A raw stored record, so age can be dictated rather than waited for.
 const rec = (origin: string, updatedAt: number, extra: Record<string, unknown> = {}) => ({
   version: DRAFT_VERSION, origin, pageUrl: origin + '/x', updatedAt, open: false,
-  note: '', type: 'bug', severity: 'med', projectId: null,
+  note: '', type: 'bug', severity: 'med', projectId: null, assignee: null,
   shot: null, prims: [], video: null, context: null, ...extra,
 })
 
@@ -179,6 +179,33 @@ const rec = (origin: string, updatedAt: number, extra: Record<string, unknown> =
   resetStore({ [draftKey(B)]: rec(B, Date.now(), { note: 'старый черновик' }) })
   const legacy = await loadDraft(B)
   assert.deepEqual(legacy!.attachments, [], 'a record without the field reads back as an empty list')
+}
+
+// 11. The addressee travels with the taxonomy it belongs to: a reload must not send the ticket to a board and a
+//     person the reporter never chose. Round trip, then a restore that survives later patches to other fields.
+{
+  resetStore()
+  await saveDraft(A, { projectId: 'p_erental', assignee: 'huester' })
+  await saveDraft(A, { note: 'кнопка не жмётся' }) // a later patch must not drop the address
+  await flushDrafts()
+
+  const d = await loadDraft(A)
+  assert.equal(d!.assignee, 'huester', 'assignee round-trips')
+  assert.equal(d!.projectId, 'p_erental', 'and stays paired with the board it was chosen on')
+
+  // Clearing the address back to "nobody" is a real value, not an absent field: null must persist, or the
+  // picker would restore a handle the reporter had deliberately removed.
+  await saveDraft(A, { assignee: null })
+  await flushDrafts()
+  assert.equal((await loadDraft(A))!.assignee, null, 'cleared address stays cleared')
+
+  // A draft written before the field existed reads back as "nobody" — the default, never as undefined.
+  const legacy = rec(B, Date.now())
+  delete (legacy as { assignee?: unknown }).assignee
+  resetStore({ [draftKey(B)]: legacy })
+  assert.equal((await loadDraft(B))!.assignee, null, 'a record without the field defaults to unaddressed')
+  // An addressee alone is not work worth announcing: it is one click, and the overlay re-offers it anyway.
+  assert.equal(hasContent(rec(A, Date.now(), { assignee: 'huester' }) as never), false)
 }
 
 console.log('extension: draft store tests passed ✓')
