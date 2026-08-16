@@ -59,6 +59,40 @@ pnpm --filter @th/mcp smoke      # drive the MCP server like an agent would
 pnpm --filter @th/mcp docs       # regenerate docs/AGENT-WORKFLOW.md (--check fails if it is stale)
 ```
 
+## Подключить агента — одной командой
+
+```bash
+export TH_DASH_PASSWORD='<пароль панели>'      # PowerShell: $env:TH_DASH_PASSWORD = '…'
+node scripts/add-agent.mjs <доска> <handle> --dir <каталог агента>
+```
+
+Вместо «создать доску → скопировать ключ агента → скопировать ключ ingest → собрать руками `claude mcp add` →
+не забыть `TH_AGENT`»: скрипт создаёт доску (если её нет), забирает **оба** ключа и пишет MCP-сервер в
+`~/.claude.json` для указанного каталога — с `TH_COLLECTOR`, `TH_PROJECT_KEY`, **`TH_AGENT`** и `TH_INGEST_KEY`, —
+после чего проверяет записанный ключ на живой доске. Владельцу остаётся ровно одно: **перезапустить приложение
+агента** (MCP-серверы читаются один раз при старте).
+
+Забытый `TH_AGENT` — это записи, подписанные именем ДОСКИ, и агент, которому нельзя адресовать работу; так на
+боевой доске и появились имена вне состава. Без handle скрипт до записи не доходит.
+
+- пароль — **только** через `TH_DASH_PASSWORD` (или `DASH_PASSWORD`); аргументом не принимается, чтобы не
+  оставаться в истории оболочки и в списке процессов;
+- ключи целиком не печатаются — только префикс и длина;
+- `~/.claude.json` копируется перед записью и перечитывается после; не разобрался как JSON — копия возвращается
+  на место, и об этом сказано вслух;
+- уже настроенный сервер молча не затирается: видно, что есть и что стало бы, дальше нужен `--force`;
+- доска по умолчанию `https://qa.ihor.work`, иначе `--collector` или `TH_COLLECTOR`; `--help` печатает все ключи.
+
+Проверка самого установщика — на одноразовой доске, одноразовом «доме» и одноразовом `~/.claude.json`
+(конфиг владельца и боевая доска не участвуют):
+
+```bash
+pnpm --filter web build && node scripts/add-agent-e2e.mjs
+```
+
+Скрипт ходит на доску теми же дверями, что и человек: `POST /api/session` — тот же пароль и та же подписанная
+кука, что у формы входа, а `POST /api/projects` (только по этой куке) отдаёт ключи созданной доски.
+
 Agents are not told how this board works by a block somebody pastes into a `CLAUDE.md`. Both MCP servers send the
 rules as the protocol's `instructions` on connect, the collector serves the same text from
 `GET /api/onboarding?projectKey=<read key>`, and `docs/AGENT-WORKFLOW.md` is generated from it — one author,
