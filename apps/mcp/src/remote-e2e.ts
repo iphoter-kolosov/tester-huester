@@ -176,7 +176,42 @@ assert.match(blank, /Send null/)
 assert.equal(repo.getReport(id!)!.assignee, MATE)
 console.log('9 assign_task refusals (stranger, blank) arrive named and the ticket is untouched ✓')
 
+// 10 — the role gate, and the half of it that matters just as much: what a role-less agent may still do
+const NEWCOMER = 'probe-newcomer'
+const newcomer = await connect({ TH_COLLECTOR: BASE, TH_PROJECT_KEY: project.readKey, TH_INGEST_KEY: project.ingestKey, TH_AGENT: NEWCOMER })
+await call(newcomer, 'add_comment', { id, body: 'Беру.' }) // registers the handle by acting, with no role
+assert.equal(repo.getAgent(NEWCOMER)?.role, '', 'the newcomer is on the roster and described by nobody')
+
+const filedByNobody = await call(newcomer, 'create_task', { assignee: MATE, title: 'x', body: 'y' })
+assert.match(filedByNobody, /^role_required/, `expected the role gate, got: ${filedByNobody}`)
+assert.match(filedByNobody, /register_agent/, 'and the refusal names the call that fixes it')
+assert.equal(repo.listReports({ projectId: project.id }).length, 1, 'nothing was filed by an agent nobody can look up')
+
+const handoverByNobody = await call(newcomer, 'assign_task', { id, assignee: MATE })
+assert.match(handoverByNobody, /^role_required/)
+assert.equal(repo.getReport(id!)!.assignee, MATE, 'and the ticket was not touched')
+
+// The boundary: registration failed, the work does not stop.
+assert.match(await call(newcomer, 'set_status', { id, status: 'taken' }), /"status":"taken"/, 'a role-less agent can still take a ticket')
+assert.match(
+  await call(newcomer, 'submit_report', {
+    id,
+    comment: 'Проверил гейт.',
+    verifyUrl: `${BASE}/qa`,
+    verifySteps: ['Открыть тикет'],
+    evidence: 'remote-e2e шаг 10',
+  }),
+  /"status":"needs_review"/,
+  'and still hand the finished work back',
+)
+
+await call(newcomer, 'register_agent', { title: 'Новичок', role: 'Проверяет гейт роли; больше ничего не трогает.' })
+const filedAfter = await call(newcomer, 'create_task', { assignee: MATE, title: 'Теперь можно', body: 'Роль объявлена.' })
+assert.match(filedAfter, /task filed by "probe-newcomer"/, `a declared role opens the handover: ${filedAfter}`)
+console.log('10 the role gate refuses create_task/assign_task, leaves the work alone, and opens once a role is declared ✓')
+
 console.log('=== every remote check passed ===')
+await newcomer.close()
 await named.close()
 await anon.close()
 server.close()

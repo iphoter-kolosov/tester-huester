@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import {
   repo,
   checkAssignee,
+  checkHandover,
   checkStatusTransition,
   normalizeIdentity,
   resolveSpeaker,
@@ -106,9 +107,14 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
     let assignee: string | null = null
     if (hasAssignee) {
-      const addressed = checkAssignee(body.assignee, repo.listAgents())
+      // One read of the roster answers both questions it is asked here: is there such an agent to receive this,
+      // and is the one handing it over an agent this board can look up.
+      const roster = repo.listAgents()
+      const addressed = checkAssignee(body.assignee, roster)
       if (!addressed.ok) return NextResponse.json({ ok: false, ...addressed.err }, { status: 400 })
       assignee = addressed.assignee
+      const handover = checkHandover(actor.identity, assignee, roster)
+      if (!handover.ok) return NextResponse.json({ ok: false, ...handover.err }, { status: 400 })
     }
 
     // Validated in full before anything is written, so a refused request leaves the ticket exactly as it was.
@@ -207,7 +213,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   }
   if ('assignee' in body) {
     // The roster check applies to the owner too: a ticket he addresses to a handle nobody answers to is just as
-    // invisible as one an agent misaddresses, and the error hands him the list of who is actually there.
+    // invisible as one an agent misaddresses, and the error hands him the list of who is actually there. The
+    // ROLE gate does not: it exists so an executor can look its filer up, and the owner is the one voice on this
+    // board every agent already knows — gating him would turn one click on the dashboard into a form.
     const addressed = checkAssignee(body.assignee, repo.listAgents())
     if (!addressed.ok) return NextResponse.json({ ok: false, ...addressed.err }, { status: 400 })
     const assignee = addressed.assignee

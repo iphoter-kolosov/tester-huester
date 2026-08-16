@@ -6,9 +6,11 @@ import assert from 'node:assert/strict'
 import {
   checkAgentStatusClaim,
   checkAssignee,
+  checkHandover,
   checkStatusTransition,
   canonicalStatus,
   describeRoster,
+  isHandover,
   statusQueryTargets,
   normalizeAgentRole,
   normalizeAgentTitle,
@@ -355,6 +357,63 @@ t('a description is trimmed and capped; a role cannot break the one-line-per-age
     assert.equal(normalizeAgentTitle(v), null)
     assert.equal(normalizeAgentRole(v), null)
   }
+})
+
+// ── handing work over requires a declared role ────────────────────────────────────────────────────────────
+// The rule and its boundary weigh the same: an agent that cannot file work for others must still be able to do
+// work, or this gate costs the board more than the nameless filers it refuses.
+const NAMELESS = 'newcomer' // on the roster by having acted, described by nobody — the state touchAgent creates
+const rosterWithNameless: RosterEntry[] = [...roster, { handle: NAMELESS, title: 'Новичок', role: '', active: true }]
+
+t('an agent with no role may not hand work to another agent, and is told the exact call that fixes it', () => {
+  const r = checkHandover(NAMELESS, 'mcp-core', rosterWithNameless)
+  assert.equal(r.ok, false)
+  assert.equal(r.ok === false && r.err.error, 'role_required')
+  const msg = r.ok === false ? r.err.message : ''
+  assert.match(msg, /register_agent/, 'the refusal names the call that fixes it')
+  assert.match(msg, /title/, 'and both fields it takes')
+  assert.match(msg, /role/)
+  assert.ok(msg.includes('does not touch the dashboard'), 'and shows what a usable role reads like')
+  assert.ok(msg.includes('mcp-core'), 'and names who was left without a filer it can look up')
+})
+t('a title is not a role: the entry is described and still refused', () => {
+  const titled: RosterEntry[] = [{ handle: NAMELESS, title: 'Новичок', role: '', active: true }]
+  const r = checkHandover(NAMELESS, 'mcp-core', [...titled, ...roster])
+  assert.equal(r.ok, false)
+  assert.equal(r.ok === false && r.err.error, 'role_required')
+  assert.ok(r.ok === false && r.err.message.includes('Новичок'), 'the title it does have is quoted, so it sees which entry is meant')
+})
+t('an agent that IS on the roster with a role hands work over freely', () => {
+  assert.equal(checkHandover('mcp-core', 'dash-ui', roster).ok, true)
+})
+t('an identity nobody declared has no entry at all, and is told to declare one before registering', () => {
+  const r = checkHandover(BOARD_NAME, 'mcp-core', roster)
+  assert.equal(r.ok, false)
+  assert.equal(r.ok === false && r.err.error, 'role_required')
+  assert.match(r.ok === false ? r.err.message : '', /TH_AGENT=<your-handle>/, 'the fallback needs a NAME first, not a role')
+})
+t('every refusal says what is still allowed — an agent must not read this as being locked out', () => {
+  for (const who of [NAMELESS, BOARD_NAME]) {
+    const r = checkHandover(who, 'mcp-core', rosterWithNameless)
+    const msg = r.ok === false ? r.err.message : ''
+    for (const allowed of ['taking a ticket', 'commenting', 'work report']) {
+      assert.ok(msg.includes(allowed), `${who}: the refusal must say "${allowed}" still works`)
+    }
+  }
+})
+t('letting a ticket go, and taking one for yourself, are not handovers', () => {
+  assert.equal(checkHandover(NAMELESS, null, rosterWithNameless).ok, true, 'clearing an address hands work to nobody')
+  assert.equal(checkHandover(NAMELESS, NAMELESS, rosterWithNameless).ok, true, 'nobody is left reporting to a stranger')
+  assert.equal(isHandover(null), false)
+  assert.equal(isHandover(''), false)
+  assert.equal(isHandover('mcp-core'), true)
+})
+t('the work itself is untouched by a missing role: take a ticket, report on it, decline it', () => {
+  // Structural, and that is the point — the status contract never consults the roster, so no roleless agent can
+  // be stopped from working by this gate.
+  assert.equal(checkStatusTransition(STATUS_TAKEN, {}, ticket(), asAgent(NAMELESS)).ok, true)
+  assert.equal(checkStatusTransition(STATUS_NEEDS_REVIEW, WORK_REPORT, ticket({ status: STATUS_TAKEN, takenBy: NAMELESS }), asAgent(NAMELESS)).ok, true)
+  assert.equal(checkStatusTransition('wontfix', { comment: 'не воспроизводится' }, ticket(), asAgent(NAMELESS)).ok, true)
 })
 
 console.log(`db/verify: all ${passed} tests passed ✓`)

@@ -161,8 +161,8 @@ const UNREGISTERED_WARNING =
   'the moment you write anything under this identity; register_agent is what gives it a title and a role.'
 
 const NO_ROLE_WARNING =
-  'Your roster entry has no role: other agents see a bare handle and have to guess whether the work is yours. ' +
-  'Call register_agent with a role.'
+  'Your roster entry has no role: other agents see a bare handle and have to guess whether the work is yours, and ' +
+  'create_task and assign_task are refused (role_required) until you write one. Call register_agent with a role.'
 
 const RETIRED_WARNING =
   'Your roster entry is retired (active:false): nobody is offered you as an assignee. Call register_agent with ' +
@@ -349,6 +349,10 @@ export const CREATE_TASK_DOC = [
   'ADDRESS IT TO A REAL AGENT: `assignee` is checked against the roster, and an unknown handle comes back refused',
   'with the roster attached rather than filed where nobody will see it. Call list_agents first and read the roles —',
   'the handle alone does not tell you whose job this is.',
+  '',
+  'AND SAY WHAT YOU ARE: filing for another agent needs a role on your own roster entry (register_agent {title,',
+  'role}), because the executor reports its finished work back to you. Without one the call is refused,',
+  '`role_required` — filing for YOURSELF is not a handover and needs nothing.',
 ].join('\n')
 
 /** The remote shim cannot create with the read key alone — see remote.ts. Appended there, not here, because it
@@ -367,7 +371,9 @@ export const ASSIGN_TASK_DOC = [
   'make you the filer: whoever created the ticket keeps the final word on it.',
   '',
   'The new assignee must be on the roster (list_agents); an unknown or retired handle is refused with the roster',
-  'attached, because a ticket handed to a name nobody answers to is a ticket nobody works.',
+  'attached, because a ticket handed to a name nobody answers to is a ticket nobody works. Handing work to ANOTHER',
+  'agent also needs a role on your own entry (register_agent) — without it the call is refused, `role_required`;',
+  'taking a ticket for yourself needs nothing.',
 ].join('\n')
 
 export const MY_TASKS_DOC = [

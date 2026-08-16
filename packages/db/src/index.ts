@@ -3,8 +3,10 @@ export type { Project, Report, NewReport, ReportType, Severity, Attachment, Upda
 export {
   checkAgentStatusClaim,
   checkAssignee,
+  checkHandover,
   checkStatusTransition,
   describeRoster,
+  isHandover,
   normalizeAgentRole,
   normalizeAgentTitle,
   resolveSpeaker,
@@ -35,7 +37,7 @@ export {
 } from './verify'
 export type {
   Verification, VerifyError, Status, Actor, ActorKind, TicketFacts, StatusDecision,
-  AssigneeDecision, RosterEntry, Speaker,
+  AssigneeDecision, HandoverDecision, RosterEntry, Speaker,
 } from './verify'
 export type { Comment, AuthorKind, ChangeEvent, EventKind } from './db'
 export {

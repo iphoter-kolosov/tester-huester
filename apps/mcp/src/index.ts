@@ -5,6 +5,7 @@ import {
   repo,
   buildInstructions,
   checkAssignee,
+  checkHandover,
   checkStatusTransition,
   normalizeAgentRole,
   normalizeAgentTitle,
@@ -493,9 +494,14 @@ server.tool(
     const actor = signWrite(agent).identity
     // Judged against the roster, and only AFTER the caller is on it, so an agent may hand a ticket to itself on its
     // first call. A typo is refused WITH the roster rather than quietly detaching the ticket from whoever needed it.
-    const decision = checkAssignee(assignee, repo.listAgents())
+    const roster = repo.listAgents()
+    const decision = checkAssignee(assignee, roster)
     if (!decision.ok) return say(`${decision.err.error}: ${decision.err.message}`)
     const to = decision.assignee
+    // Same rule the collector enforces on PATCH /api/reports/:id — this server writes straight to the database, so
+    // it has to ask the same question rather than inherit the answer.
+    const allowed = checkHandover(actor, to, roster)
+    if (!allowed.ok) return say(`${allowed.err.error}: ${allowed.err.message}`)
     if (!repo.setAssignee(r.id, to)) return say(`no report ${id}`)
     repo.logEvent({
       projectId: r.projectId,
@@ -528,8 +534,13 @@ server.tool(
     if (!to) return say(CREATE_TASK_NEEDS_ASSIGNEE)
     // The roster check runs after the filer is on the roster, so filing a task for yourself works on the first
     // call; the refusal carries the roster, which is the one moment the caller is actually asking who exists.
-    const decision = checkAssignee(to, repo.listAgents())
+    const roster = repo.listAgents()
+    const decision = checkAssignee(to, roster)
     if (!decision.ok) return say(`${decision.err.error}: ${decision.err.message}`)
+    // Same rule the collector enforces on POST /api/ingest — this server files straight into the database, so it
+    // has to ask the same question rather than inherit the answer.
+    const allowed = checkHandover(creator, decision.assignee, roster)
+    if (!allowed.ok) return say(`${allowed.err.error}: ${allowed.err.message}`)
     const checked = checkLinks(links)
     if (!checked.ok) return say(checked.message)
     const note = composeTaskNote(title, body, checked.links)

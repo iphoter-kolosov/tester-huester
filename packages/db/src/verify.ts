@@ -194,6 +194,15 @@ function describeAddressable(roster: RosterEntry[]): string {
 export type AssigneeDecision = { ok: true; assignee: string | null } | { ok: false; err: VerifyError }
 
 /**
+ * Is this `assignee` value an ADDRESS, or is it letting the ticket go? The two are judged by different rules —
+ * clearing an address hands nothing to anybody — so what counts as a handover is defined once, here, and every
+ * caller asks rather than re-deciding with its own `!= null` test.
+ */
+export function isHandover(rawAssignee: unknown): boolean {
+  return rawAssignee != null && rawAssignee !== ''
+}
+
+/**
  * Validate whom a ticket is being addressed to, against the roster of agents that actually exist.
  *
  * Why a refusal rather than a stored string: `assignee` was filled on zero tickets out of ~370. The mechanism was
@@ -205,7 +214,7 @@ export type AssigneeDecision = { ok: true; assignee: string | null } | { ok: fal
  * `null` and `''` are not errors — a ticket is allowed to go back to being unaddressed.
  */
 export function checkAssignee(raw: unknown, roster: RosterEntry[]): AssigneeDecision {
-  if (raw == null || raw === '') return { ok: true, assignee: null }
+  if (!isHandover(raw)) return { ok: true, assignee: null }
   const wanted = normalizeIdentity(raw)
   if (!wanted) {
     return {
@@ -243,6 +252,69 @@ export function checkAssignee(raw: unknown, roster: RosterEntry[]): AssigneeDeci
     }
   }
   return { ok: true, assignee: wanted }
+}
+
+export type HandoverDecision = { ok: true } | { ok: false; err: VerifyError }
+
+/** Short enough to read inside a refusal, and shaped the way a role should be: what I own, what I do not touch. */
+const ROLE_EXAMPLE = 'Owns the MCP servers and their contract; does not touch the dashboard.'
+
+const DECLARE_ROLE_FIX =
+  'Call register_agent with a title AND a role (REST: POST /api/agents {agent, title, role}), then retry. A role is ' +
+  `one or two sentences saying what you do and what you do NOT touch — e.g. "${ROLE_EXAMPLE}" A title is a label; ` +
+  'the role is the sentence a colleague reads before deciding a task is theirs.'
+
+/**
+ * Said in every refusal, because the dangerous misreading of this rule is "I am not registered, therefore I am
+ * locked out" — an agent that concludes that stops working on tickets it could have finished.
+ */
+const ROLE_ONLY_GATES_HANDOVER =
+  'Nothing else is blocked: reading the board, taking a ticket, commenting, submitting a work report and changing a ' +
+  'status all work without a role. Only handing work to another agent needs one.'
+
+/**
+ * May this agent hand a ticket to another one? Only if the board can say what this agent IS.
+ *
+ * Why a refusal and not another line in the onboarding text: every server already tells an agent to register
+ * first, and an instruction is obeyed only when the model chooses to obey it — which is how the roster came to
+ * depend on politeness. A task carries its filer's handle, and that handle is where the executor sends its
+ * questions and its finished work report; a filer nobody can look up leaves the executor reporting to a name.
+ * So the requirement is enforced at the handover, and — like everything else here — refused before any write.
+ *
+ * Handing a ticket to YOURSELF is not a handover and stays allowed: there is no colleague on the other end to be
+ * left with a stranger's name, and an agent whose registration failed must still be able to work.
+ *
+ * `actorIdentity` and `assignee` must already be canonical (normalizeIdentity), as the stored columns are — this
+ * is a plain equality test against the roster, and raw text would silently match nobody.
+ */
+export function checkHandover(actorIdentity: string, assignee: string | null, roster: RosterEntry[]): HandoverDecision {
+  if (!assignee || sameIdentity(actorIdentity, assignee)) return { ok: true }
+  const mine = roster.find((e) => e.handle === actorIdentity)
+  if (mine && mine.role) return { ok: true }
+  if (!mine) {
+    return {
+      ok: false,
+      err: {
+        error: 'role_required',
+        message:
+          `You are writing as "${actorIdentity || 'nobody'}", and the roster has no entry under that name — so a ticket ` +
+          `handed to "${assignee}" would arrive from somebody it cannot look up, and everything it asks back would go ` +
+          `to a bare handle. Either you never declared an identity and are signing with the BOARD's own name (set ` +
+          'TH_AGENT=<your-handle> in this server\'s environment, or pass `agent` on every call), or you have not ' +
+          `registered yet. ${DECLARE_ROLE_FIX}\n${ROLE_ONLY_GATES_HANDOVER}`,
+      },
+    }
+  }
+  return {
+    ok: false,
+    err: {
+      error: 'role_required',
+      message:
+        `Your roster entry "${actorIdentity}"${mine.title ? ` (${mine.title})` : ''} has no role, so nothing on this board ` +
+        `says what you are responsible for — and "${assignee}" would be left reporting finished work to a handle it ` +
+        `cannot look up. ${DECLARE_ROLE_FIX}\n${ROLE_ONLY_GATES_HANDOVER}`,
+    },
+  }
 }
 
 /** The human name shown next to a handle. Empty means "not stated" and is stored as such — never invented. */

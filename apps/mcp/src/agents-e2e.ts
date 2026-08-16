@@ -209,6 +209,16 @@ const newcomer = JSON.parse(await call('whoami', { agent: THIRD })) as WhoAmIAns
 assert.equal(newcomer.registered, true)
 assert.ok(newcomer.warnings.some((w) => w.includes('register_agent')), 'and it is told to describe itself')
 
+// …but a handle nobody has described cannot hand work ON: the task would arrive from a filer the executor has no
+// way of looking up. The comment above is the other half of the rule — the same agent is not stopped from working.
+const namelessFiling = await call('create_task', { assignee: EXECUTOR, title: 'x', body: 'y', agent: THIRD })
+assert.match(namelessFiling, /^role_required/, 'an agent with no role may not file work for another')
+assert.match(namelessFiling, /register_agent/, 'and the refusal names the call that fixes it')
+assert.equal(repo.listReports({ projectId: project.id }).length, 1, 'nothing was filed by a filer nobody can look up')
+const namelessHandover = await call('assign_task', { id, assignee: EXECUTOR, agent: THIRD })
+assert.match(namelessHandover, /^role_required/, 'nor hand an existing ticket to somebody else')
+assert.equal(repo.getReport(id)!.assignee, EXECUTOR, 'and the refused handover changed nothing')
+
 assert.match(await call('assign_task', { id, assignee: THIRD, agent: FILER }), /is now for "third-agent"/)
 assert.equal(repo.getReport(id)!.assignee, THIRD)
 const blank = await call('assign_task', { id, assignee: '   ', agent: FILER })

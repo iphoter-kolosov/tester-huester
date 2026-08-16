@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { NextResponse } from 'next/server'
-import { repo, checkAssignee, resolveSpeaker, MAX_ATTACHMENTS, IDENTITY_EXTENSION, type Attachment, type ReportType, type Severity } from '@th/db'
+import { repo, checkAssignee, checkHandover, resolveSpeaker, MAX_ATTACHMENTS, IDENTITY_EXTENSION, type Attachment, type ReportType, type Severity } from '@th/db'
 import { storage } from '@/lib/storage'
 
 export const runtime = 'nodejs'
@@ -122,9 +122,15 @@ export async function POST(req: Request) {
   // Refused rather than dropped, and refused HERE — before any screenshot, video or replay is written to storage,
   // so a misaddressed task costs nothing. This is the moment an agent is actually asking "who is there to take
   // this", and answering it with the roster is what turns addressing from a field nobody filled into a habit.
-  const addressed = checkAssignee(body.assignee, repo.listAgents())
+  const roster = repo.listAgents()
+  const addressed = checkAssignee(body.assignee, roster)
   if (!addressed.ok) return NextResponse.json({ ok: false, ...addressed.err }, { status: 400, headers: CORS })
   const assignee = addressed.assignee
+  // Filing work FOR somebody costs a declared role, for the same reason and at the same moment: the executor sends
+  // its questions and its finished report back to whoever filed this, so the filer has to be an agent the board can
+  // look up. A capture that addresses nobody — the extension's entire traffic — hands work to no one and is untouched.
+  const handover = checkHandover(creator, assignee, roster)
+  if (!handover.ok) return NextResponse.json({ ok: false, ...handover.err }, { status: 400, headers: CORS })
 
   let screenshotUrl: string | null = null
   const shot = body.screenshot

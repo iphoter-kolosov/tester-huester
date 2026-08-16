@@ -42,6 +42,7 @@ export const ONBOARDING_TOOLS = {
   listAgents: 'list_agents',
   registerAgent: 'register_agent',
   createTask: 'create_task',
+  assignTask: 'assign_task',
   setStatus: 'set_status',
   submitReport: 'submit_report',
   myTasks: 'my_tasks',
@@ -165,6 +166,11 @@ export function buildInstructions(facts: OnboardingFacts): string {
     `FIRST, IN THIS ORDER: ${t.whoami} (what you write as, and what is wrong with it), then ${t.listAgents} before you`,
     `address anything, then ${t.registerAgent} {title, role} — the role is the sentence a colleague reads before`,
     'deciding a task is yours.',
+    // The one refusal an agent can hit before it has done anything wrong, so it is stated up front rather than
+    // discovered as a 400 — together with its boundary, or an agent reads it as "I am locked out".
+    `THE ROLE IS A CONDITION: without one, ${t.createTask} and ${t.assignTask} are refused (role_required) — work handed`,
+    'over by an agent nobody can look up leaves the executor reporting to a bare handle. Everything else works without',
+    `it: reading, ${t.setStatus}, comments, ${t.submitReport}.`,
     '',
     rosterBlock(facts.roster),
     '',

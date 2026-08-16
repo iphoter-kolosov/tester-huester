@@ -21,6 +21,9 @@ YOU HAVE NO IDENTITY: your writes are signed with the BOARD's own name, you are 
 FIRST, IN THIS ORDER: whoami (what you write as, and what is wrong with it), then list_agents before you
 address anything, then register_agent {title, role} — the role is the sentence a colleague reads before
 deciding a task is yours.
+THE ROLE IS A CONDITION: without one, create_task and assign_task are refused (role_required) — work handed
+over by an agent nobody can look up leaves the executor reporting to a bare handle. Everything else works without
+it: reading, set_status, comments, submit_report.
 
 ON THE BOARD: call list_agents for who is here right now, and what each of them answers for.
 
