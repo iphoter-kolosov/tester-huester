@@ -1136,6 +1136,11 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
     lastPrimSig = primSig()
     if (!loaded) setMsg('Could not load screenshot', 'err')
     if (restored) {
+      // The note is the ONLY part of a draft the tester typed by hand, and it was the one part never put back:
+      // type/severity/project/assignee are restored at their declarations, the backdrop and markup just above.
+      // Worse than losing it on screen — the persist() two lines down then wrote the EMPTY textarea over the
+      // stored text, so the reload the draft store exists to survive was the very thing that destroyed it.
+      note.value = restored.note ?? ''
       updateClipPanel() // a restored video has to reappear in the "attach the recording?" block
       showRestoreBar(restored)
       // Reopened by hand after an Esc: mark the draft live again, so the NEXT reload brings the overlay back
