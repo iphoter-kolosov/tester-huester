@@ -1,0 +1,228 @@
+/* Экран «Агенты»: кому можно отдать работу и кто замолчал.
+   Цвета — только токенами из globals.css. Ни одного литерала. */
+
+.lead {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.65;
+  max-width: var(--measure);
+  margin: 0 0 var(--s4);
+}
+
+/* ── сводка: ответ «кто вообще возьмёт» одной строкой, до чтения карточек ─────────────────────────────── */
+.sum {
+  display: flex;
+  align-items: center;
+  gap: var(--s5);
+  flex-wrap: wrap;
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--border);
+  border-radius: var(--r3);
+  background: var(--panel);
+  box-shadow: var(--shadow-1);
+  margin-bottom: var(--s5);
+}
+.sumitem { display: inline-flex; align-items: baseline; gap: 7px; font-size: var(--fs-sm); color: var(--muted); }
+.sumn { font-family: var(--font-mono); font-size: var(--fs-h2); font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
+.sumitem_zero .sumn { color: var(--muted3); font-weight: 400; }
+.sumdot { width: 8px; height: 8px; border-radius: 50%; align-self: center; flex: none; }
+.dot_live { background: var(--verified); }
+.dot_quiet { background: var(--taken); }
+.dot_silent { background: var(--rejected); }
+.sumsep { flex: 1 1 auto; }
+.sumnote { font-size: var(--fs-xs); color: var(--muted3); line-height: 1.45; max-width: 36ch; }
+
+.warn {
+  border: 1px dashed color-mix(in srgb, var(--taken) 45%, var(--border));
+  background: color-mix(in srgb, var(--taken) 8%, transparent);
+  border-radius: var(--r2);
+  padding: 9px var(--s3);
+  margin-bottom: var(--s4);
+  font-size: 12.5px;
+  color: var(--warn-ink);
+}
+
+/* ── группы по живости ──────────────────────────────────────────────────────────────────────────────── */
+.group { margin-bottom: var(--s6); }
+.cards { display: flex; flex-direction: column; gap: var(--s3); }
+
+/* ── карточка агента ────────────────────────────────────────────────────────────────────────────────── */
+.card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 268px;
+  gap: var(--s5);
+  align-items: start;
+  border: 1px solid var(--border);
+  border-radius: var(--r3);
+  background: var(--panel);
+  box-shadow: var(--shadow-1);
+  padding: var(--s4) var(--s4) var(--s3);
+}
+/* Молчание обязано быть видно раньше первого прочитанного слова: остановившийся работник иначе выглядит
+   ровно как занятой. Полоса слева — не украшение, это единственное отличие. */
+.card_quiet { border-color: color-mix(in srgb, var(--taken) 40%, var(--border)); box-shadow: inset 4px 0 0 var(--taken), var(--shadow-1); }
+.card_silent { border-color: color-mix(in srgb, var(--rejected) 45%, var(--border)); box-shadow: inset 4px 0 0 var(--rejected), var(--shadow-1); }
+.card_retired { opacity: .66; }
+
+.main { min-width: 0; display: flex; flex-direction: column; gap: var(--s3); }
+
+.idline { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.handle {
+  font-family: var(--font-mono);
+  font-size: var(--fs-h3);
+  font-weight: 600;
+  color: var(--accent-ink);
+  user-select: all;
+}
+.live {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 2px 10px;
+  color: var(--muted2);
+}
+.live_live { color: var(--verified); border-color: color-mix(in srgb, var(--verified) 45%, var(--border-strong)); }
+.live_quiet { color: var(--warn-ink); border-color: color-mix(in srgb, var(--taken) 45%, var(--border-strong)); }
+.live_silent { color: var(--danger-ink); border-color: color-mix(in srgb, var(--rejected) 45%, var(--border-strong)); background: color-mix(in srgb, var(--rejected) 8%, transparent); }
+.mark {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--wontfix);
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 2px 9px;
+}
+
+/* Диагноз, который карточка ставит сама: что здесь не так и что с этим делать. */
+.flag {
+  border-radius: var(--r2);
+  padding: 9px var(--s3);
+  font-size: 12.5px;
+  line-height: 1.55;
+  border: 1px solid color-mix(in srgb, var(--taken) 45%, var(--border));
+  background: color-mix(in srgb, var(--taken) 7%, transparent);
+  color: var(--warn-ink);
+  max-width: var(--measure);
+}
+.flag_hard { border-color: color-mix(in srgb, var(--rejected) 45%, var(--border)); background: color-mix(in srgb, var(--rejected) 7%, transparent); color: var(--danger-ink); }
+.flag b { color: var(--text); }
+.flag code { font-family: var(--font-mono); font-size: 11.5px; color: var(--text); background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r1); padding: 1px 6px; }
+.flaglink { color: var(--accent); font-weight: 600; white-space: nowrap; }
+.flaglink:hover { text-decoration: underline; }
+
+.boards { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.boardsk { font-size: var(--fs-label); font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted3); }
+.board { font-size: 10.5px; font-weight: 600; color: var(--muted2); border: 1px solid var(--border); border-radius: 999px; padding: 1px var(--s2); }
+.board_none { font-style: italic; font-weight: 400; }
+.since { font-size: var(--fs-xs); color: var(--muted3); margin-left: auto; }
+
+/* ── правая колонка: что на нём висит ───────────────────────────────────────────────────────────────── */
+.work { display: flex; flex-direction: column; gap: 3px; }
+.stat {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  padding: 5px var(--s2);
+  border-radius: var(--r1);
+  font-size: 12.5px;
+  color: var(--muted);
+  border: 1px solid transparent;
+}
+a.stat:hover { border-color: var(--border-strong); background: var(--panel2); }
+.statk { flex: 1; min-width: 0; }
+.statn { font-family: var(--font-mono); font-weight: 600; font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
+.stat_zero .statk { color: var(--muted3); }
+.stat_zero .statn { color: var(--muted3); font-weight: 400; }
+/* Единственная цифра на этом экране, которой позволено кричать: она про очередь ВЛАДЕЛЬЦА. */
+.stat_attention {
+  color: var(--attention-ink);
+  font-weight: 600;
+  border-color: color-mix(in srgb, var(--attention) 40%, var(--border));
+  background: color-mix(in srgb, var(--attention) 7%, transparent);
+}
+.stat_attention .statn { color: var(--attention); }
+a.stat_attention:hover { border-color: var(--attention); background: color-mix(in srgb, var(--attention) 12%, transparent); }
+.workdiv { border-top: 1px solid var(--border); margin: var(--s2) 0 var(--s1); }
+.tolist { font-size: 12px; color: var(--muted2); padding: 4px var(--s2); }
+.tolist:hover { color: var(--accent); }
+
+/* ── правка имени и роли прямо в карточке ───────────────────────────────────────────────────────────── */
+.ed { display: flex; flex-direction: column; gap: 3px; }
+.edlbl { font-size: var(--fs-label); font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted3); }
+/* Поле выглядит текстом, пока его не трогают: карточка должна читаться, а не выглядеть анкетой.
+   Рамка появляется под курсором и в фокусе — тогда же, когда становится нужна. */
+.edin {
+  width: 100%;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text);
+  border-radius: var(--r1);
+  padding: 3px 7px;
+  margin-left: -7px;
+  font: inherit;
+  outline: none;
+}
+.edin:hover:not(:disabled) { border-color: var(--border); background: var(--panel2); }
+.edin:focus { border-color: var(--accent); background: var(--panel2); }
+.edin:disabled { opacity: .55; }
+.edin::placeholder { color: var(--muted3); font-style: italic; }
+.edname { font-family: var(--font-display); font-size: var(--fs-h2); font-weight: 700; letter-spacing: -.015em; }
+.edrole {
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+  color: var(--muted);
+  max-width: var(--measure);
+  /* Высота считается по длине роли (см. AgentEditor), поэтому ручка растягивания здесь была бы значком без
+     работы — на семи карточках подряд это семь лишних значков. */
+  resize: none;
+}
+.edfoot { display: flex; align-items: center; gap: var(--s2); min-height: 26px; }
+.edhint { font-size: var(--fs-xs); color: var(--muted2); margin-right: auto; }
+/* В покое подсказка молчит и проявляется под курсором: на списке карточек она иначе повторяется столько
+   раз, сколько агентов, и перестаёт читаться вообще. */
+.edhint_idle { opacity: 0; transition: opacity .12s; }
+.card:hover .edhint_idle, .ed:focus-within .edhint_idle { opacity: 1; }
+.edhint_dirty { color: var(--warn-ink); font-weight: 600; }
+.edhint_saved { color: var(--verified); font-weight: 600; }
+.ederr {
+  padding: var(--s2) 11px;
+  border: 1px solid color-mix(in srgb, var(--rejected) 45%, var(--border));
+  background: color-mix(in srgb, var(--rejected) 8%, transparent);
+  border-radius: var(--r2);
+  color: var(--danger-ink);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+/* ── имена вне состава ──────────────────────────────────────────────────────────────────────────────── */
+.strangers {
+  border: 1px solid var(--border);
+  border-radius: var(--r3);
+  background: var(--panel);
+  padding: var(--s4);
+  box-shadow: var(--shadow-1);
+}
+.strangerlist { display: flex; flex-direction: column; gap: 6px; margin-top: var(--s3); }
+.stranger {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  border-radius: var(--r2);
+  padding: 7px var(--s3);
+}
+a.stranger:hover { border-color: var(--accent); }
+.strangerh { font-family: var(--font-mono); font-size: 12px; font-weight: 600; color: var(--warn-ink); margin-right: auto; }
+.strangern { font-size: var(--fs-xs); color: var(--muted2); font-variant-numeric: tabular-nums; }
+
+@media (max-width: 900px) {
+  .card { grid-template-columns: minmax(0, 1fr); gap: var(--s3); }
+  .work { border-top: 1px solid var(--border); padding-top: var(--s2); }
+}

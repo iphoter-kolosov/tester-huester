@@ -1,0 +1,129 @@
+/* Доска: список тикетов, который читают СВЕРХУ ВНИЗ. Отсюда всё остальное:
+   правая часть строки — не «что влезло», а четыре колонки постоянной ширины (статус · кому · возраст ·
+   архив), поэтому глаз идёт по одному столбцу, а не прыгает по строке. Ширины заданы здесь один раз и
+   используются и строкой, и шапкой над списком — иначе подписи разъезжаются с содержимым.
+   Цвета — только токенами из globals.css. */
+
+.board {
+  /* Ширины правых колонок. Меняются в одном месте — шапка и все строки следуют. */
+  --col-status: 138px;
+  --col-assign: 186px;
+  --col-age: 62px;
+  --col-act: 34px;
+}
+
+/* Шапка списка повторяет геометрию строки тикета (120px снимок · середина · правые колонки). */
+.head {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr) auto;
+  gap: var(--s4);
+  align-items: center;
+  padding: 0 var(--s3) var(--s2);
+  margin-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+.headk {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted3);
+}
+/* Подпись над колонкой цифр стоит там же, где сами цифры. */
+.headk_right { text-align: right; }
+
+.aside {
+  display: grid;
+  grid-template-columns: var(--col-status) var(--col-assign) var(--col-age) var(--col-act);
+  gap: var(--s2);
+  align-items: start;
+}
+/* Возраст — цифра в колонке цифр, поэтому моноширинный и выровнен по правому краю. */
+.age {
+  font-size: 12px;
+  color: var(--muted2);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  padding-top: 6px;
+  white-space: nowrap;
+}
+.act { display: flex; justify-content: flex-end; }
+
+.list { display: flex; flex-direction: column; gap: 8px; }
+
+/* ── середина строки ────────────────────────────────────────────────────────────────────────────────── */
+.nonote { color: var(--muted2); font-weight: 400; font-style: italic; }
+.host { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); }
+.tag {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px var(--s2);
+  white-space: nowrap;
+}
+/* Важность отмечается ТОЛЬКО когда она выше обычной: подпись «обычная» на каждой строке — это шум. */
+.sev_high { color: var(--warn-ink); border-color: color-mix(in srgb, var(--taken) 45%, var(--border)); }
+.sev_crit {
+  color: var(--danger-ink);
+  border-color: color-mix(in srgb, var(--rejected) 45%, var(--border));
+  background: color-mix(in srgb, var(--rejected) 7%, transparent);
+}
+/* Значки доказательств: сколько снимков, есть ли видео, сколько шагов и сколько ошибок в консоли. */
+.marks { display: inline-flex; gap: 6px; align-items: center; }
+.mark { font-size: var(--fs-xs); font-weight: 600; color: var(--muted2); white-space: nowrap; }
+.mark_bad { color: var(--danger-ink); }
+.holder { font-size: 11.5px; color: var(--muted2); white-space: nowrap; }
+.holderh { font-family: var(--font-mono); font-weight: 600; color: var(--muted); }
+
+/* ── предупреждение о потолке выборки ───────────────────────────────────────────────────────────────── */
+.ceiling {
+  margin-bottom: var(--s4);
+  padding: 9px var(--s3);
+  border: 1px dashed color-mix(in srgb, var(--taken) 45%, var(--border));
+  background: color-mix(in srgb, var(--taken) 8%, transparent);
+  border-radius: var(--r2);
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--warn-ink);
+}
+
+/* ── страницы ───────────────────────────────────────────────────────────────────────────────────────── */
+.pager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--s4);
+  margin-top: var(--s5);
+  padding-top: var(--s4);
+  border-top: 1px solid var(--border);
+}
+/* Ссылка, ведущая себя как кнопка: страницы списка и единственное действие на пустом экране. */
+.linkbtn {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: var(--r2);
+  padding: 7px var(--s4);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.linkbtn:hover { border-color: var(--accent); color: var(--accent-ink); }
+.pagerat { color: var(--muted2); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+
+/* Ноутбук: колонки сужаются, но остаются колонками — терять вертикальное чтение ради подписей нельзя,
+   поэтому первой уходит шапка, а не выравнивание. */
+@media (max-width: 1100px) {
+  .board { --col-status: 118px; --col-assign: 158px; --col-age: 48px; }
+  .head { display: none; }
+}
+
+/* Телефон: строка тикета сама перестаёт быть тремя колонками (см. ui.module.css), и правая часть ложится
+   под неё во всю ширину. Держать здесь фиксированные ширины значит увести страницу вбок. */
+@media (max-width: 760px) {
+  .aside { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto auto; width: 100%; }
+  .age { text-align: left; }
+}

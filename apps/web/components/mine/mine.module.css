@@ -1,0 +1,218 @@
+/* Экран «Мой ход». Цвета — только токенами из globals.css; ни одного литерала.
+   Правило экрана: цветом внимания красится ТОЛЬКО очередь приёмки. Остальное — бумага, чернила и линии,
+   иначе очередь перестанет быть видна с другого конца экрана. */
+
+/* ── верхняя строка: живые числа, каждое — ссылка на то, что оно считает ────────────────────────────── */
+.tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(168px, 1fr));
+  gap: var(--s3);
+  margin: var(--s5) 0 var(--s6);
+}
+.tile {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: var(--s4);
+  border: 1px solid var(--border);
+  border-radius: var(--r3);
+  background: var(--panel);
+  box-shadow: var(--shadow-1);
+  transition: border-color .12s;
+}
+.tile:hover { border-color: var(--accent); }
+.tilen {
+  font-family: var(--font-display);
+  font-size: var(--fs-display);
+  font-weight: 700;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
+}
+.tilelbl { color: var(--muted); font-size: var(--fs-sm); line-height: 1.35; }
+/* Единственная плитка, которой позволено кричать, — и только пока в очереди что-то есть. */
+.tile_attention {
+  border-color: color-mix(in srgb, var(--attention) 42%, var(--border));
+  box-shadow: inset 3px 0 0 var(--attention), var(--shadow-1);
+}
+.tile_attention .tilen { color: var(--attention-ink); }
+.tile_attention:hover { border-color: var(--attention); }
+/* Ноль читается спокойно: пустая очередь — это хорошая новость, а не ошибка. */
+.tile_zero .tilen { color: var(--muted3); font-weight: 400; }
+
+.warn {
+  margin: 0 0 var(--s5);
+  padding: 9px var(--s3);
+  border: 1px dashed color-mix(in srgb, var(--taken) 45%, var(--border));
+  background: color-mix(in srgb, var(--taken) 8%, transparent);
+  border-radius: var(--r2);
+  color: var(--warn-ink);
+  font-size: 12.5px;
+  max-width: var(--measure);
+}
+
+/* ── две колонки: работа слева, обстановка справа ───────────────────────────────────────────────────── */
+.cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--s6);
+  align-items: start;
+}
+.col { min-width: 0; }
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s4);
+  position: sticky;
+  top: var(--s5);
+}
+.panel {
+  border: 1px solid var(--border);
+  border-radius: var(--r3);
+  background: var(--panel);
+  box-shadow: var(--shadow-1);
+  padding: var(--s4);
+}
+.block { margin-bottom: var(--s7); }
+.item { margin-bottom: var(--s3); }
+
+/* ── строка тикета: подписи вокруг готовой строки ───────────────────────────────────────────────────── */
+.whorow {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.who { display: inline-flex; align-items: center; gap: 6px; min-width: 0; }
+.wholbl {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--muted3);
+}
+.waited { color: var(--muted2); font-size: var(--fs-sm); }
+/* Просрочка — предупреждение, а не тревога: тревога на этом экране занята очередью приёмки. */
+.stuckwhy { color: var(--warn-ink); font-size: var(--fs-sm); font-weight: 600; }
+.tag {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px var(--s2);
+}
+.site { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--muted2); }
+
+.open { color: var(--accent); font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; }
+.open:hover { text-decoration: underline; }
+.action {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  border-radius: var(--r2);
+  padding: var(--s2) var(--s4);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.action:hover { border-color: var(--accent); color: var(--accent); }
+.more { color: var(--muted2); font-size: var(--fs-sm); margin: var(--s2) 0 0; }
+
+/* Вопрос агента — его слова, а не пересказ. Четыре строки: дальше читают в тикете, где виден весь разговор. */
+.quote {
+  margin: var(--s2) 0 0;
+  padding: var(--s2) var(--s3);
+  border-left: 2px solid var(--border-strong);
+  background: var(--panel2);
+  border-radius: 0 var(--r2) var(--r2) 0;
+  font-size: 13px;
+  line-height: 1.55;
+  max-width: var(--measure);
+  white-space: pre-wrap;
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ── слово владельца прямо в строке ─────────────────────────────────────────────────────────────────── */
+.verdict {
+  margin-top: var(--s3);
+  padding-top: var(--s3);
+  border-top: 1px dashed var(--border-strong);
+}
+.verdictacts { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.reason { display: flex; flex-direction: column; gap: var(--s2); margin-top: var(--s3); }
+.reasonta {
+  width: 100%;
+  max-width: var(--measure);
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: var(--r2);
+  padding: var(--s2) var(--s3);
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.reasonta:focus { outline: none; border-color: var(--attention); }
+.reasonfoot { display: flex; align-items: center; gap: var(--s2); max-width: var(--measure); }
+.reasonhint { color: var(--muted3); font-size: var(--fs-xs); margin-right: auto; }
+.verdicterr { color: var(--danger-ink); font-size: 12.5px; font-weight: 600; margin: var(--s2) 0 0; }
+
+/* ── боковая колонка ────────────────────────────────────────────────────────────────────────────────── */
+.roster { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.rosterrow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--s2);
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+.rosterrow:last-child { border-bottom: 0; }
+
+.feed { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.feedrow {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr);
+  gap: var(--s2);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.feedwhen {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--muted3);
+  text-align: right;
+  padding-top: 2px;
+  font-variant-numeric: tabular-nums;
+}
+.feedtxt { color: var(--muted); min-width: 0; }
+.feedwho { color: var(--text); font-weight: 600; }
+.feedlink { color: var(--accent); font-family: var(--font-mono); font-size: 11px; }
+.feedlink:hover { text-decoration: underline; }
+.feeddetail {
+  display: block;
+  color: var(--muted3);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Ниже этой ширины боковая колонка перестаёт быть колонкой: она уезжает под работу, а не сжимается в щель. */
+@media (max-width: 1180px) {
+  .cols { grid-template-columns: minmax(0, 1fr); gap: var(--s5); }
+  .side { position: static; }
+}
+@media (max-width: 560px) {
+  .tiles { grid-template-columns: repeat(auto-fit, minmax(132px, 1fr)); gap: var(--s2); }
+  .tile { padding: var(--s3); }
+  .tilen { font-size: var(--fs-h1); }
+}

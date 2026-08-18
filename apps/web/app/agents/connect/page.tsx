@@ -5,6 +5,8 @@ import { repo, buildConnectSnippet, buildInstructions } from '@th/db'
 import CopySnippet from '@/components/CopySnippet'
 import { isAuthed } from '@/lib/auth'
 import { collectorBase } from '@/lib/collector'
+import Shell from '@/components/shell/Shell'
+import { ROUTE_AGENTS, ROUTE_SETUP, ROUTE_TICKETS } from '@/components/shell/nav'
 
 export const dynamic = 'force-dynamic'
 
@@ -48,12 +50,13 @@ export default async function Connect() {
   const drifted = [ENV_AGENT, ENV_INGEST].filter((v) => cards.some((c) => c.snippet && !c.snippet.includes(v)))
 
   return (
+    <Shell active="agents">
     <main className="wrap">
-      <Link className="back" href="/agents">← состав</Link>
+      <Link className="back" href={ROUTE_AGENTS}>← агенты</Link>
       <div className="h" style={{ marginTop: 10 }}>
         <span className="h1">Подключить агента</span>
         <span className="c">досок: {projects.length}</span>
-        <Link className="hnav" href="/" title="Все тикеты">На доску</Link>
+        <Link className="hnav" href={ROUTE_TICKETS} title="Все тикеты">На доску</Link>
       </div>
       <p className="rosterlead">
         Одна команда на доску — и агент видит тикеты, состав и ленту событий. Инструкцию в его CLAUDE.md копировать
@@ -79,7 +82,8 @@ export default async function Connect() {
         </li>
         <li>
           <code>{ENV_INGEST}</code> нужен, только если агент будет <b>сам ставить тикеты</b>. Ключ — ниже, в карточке
-          доски. Если агент только чинит чужие тикеты, строку можно удалить.
+          доски, и он же лежит в <Link href={ROUTE_SETUP}>Настройке</Link>. Если агент только чинит чужие тикеты,
+          строку можно удалить.
         </li>
         <li>
           Путь в конце команды — папка с копией репозитория <code>tester-huester</code> на машине агента.
@@ -93,7 +97,7 @@ export default async function Connect() {
 
       {projects.length === 0 ? (
         <div className="empty">
-          Ни одной доски. Создайте её на <Link href="/">главной</Link> — ключи выдаются вместе с доской.
+          Ни одной доски. Заведите её в <Link href={ROUTE_SETUP}>Настройке</Link> — ключи выдаются вместе с доской.
         </div>
       ) : null}
 
@@ -108,8 +112,8 @@ export default async function Connect() {
             <CopySnippet text={snippet} label="Скопировать команду" />
           ) : (
             <div className="cnkeyless">
-              У этой доски нет ключа агента — подключиться к ней нечем. Выдайте ключ на <Link href="/">главной</Link>:
-              полоса projects, кнопка ↻ в строке agent.
+              У этой доски нет ключа агента — подключиться к ней нечем. Выдайте его в{' '}
+              <Link href={ROUTE_SETUP}>Настройке</Link>: карточка доски, строка «ключ агента».
             </div>
           )}
 
@@ -132,5 +136,6 @@ export default async function Connect() {
         </section>
       ))}
     </main>
+    </Shell>
   )
 }

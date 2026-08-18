@@ -1,0 +1,119 @@
+/* Панель отбора доски. Две полосы с разной работой, и путать их нельзя:
+   ВЕРХНЯЯ — выбор кучи, с которой сейчас работают (вся доска / очередь на проверку / архив).
+   НИЖНЯЯ — отбор внутри выбранной кучи, ОДНОЙ строкой, и она вслух говорит, сколько условий включено.
+   Цвета — только токенами из globals.css. */
+
+.bar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--s3);
+  margin-bottom: var(--s4);
+  padding-bottom: var(--s3);
+  border-bottom: 1px solid var(--border);
+}
+
+.scopes { display: flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+.tabs {
+  display: inline-flex;
+  /* Телефон: группа вкладок шире экрана, и без переноса она уводит вбок ВСЮ страницу. */
+  flex-wrap: wrap;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: var(--r2);
+  background: var(--panel2);
+}
+.tabs_right { margin-left: auto; }
+.tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  border-radius: var(--r1);
+  padding: 6px 14px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+}
+.tab:hover { color: var(--text); }
+.tab_on { background: var(--panel); color: var(--text); box-shadow: var(--shadow-1); }
+/* Очередь владельца держит свой цвет и когда она не выбрана: её ищут глазами, а не читая подписи. */
+.tab_review { color: var(--attention-ink); }
+.tab_review:hover { color: var(--attention); }
+.tab_on.tab_review { color: var(--attention); }
+
+.filters { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+
+.search { display: flex; align-items: center; gap: 5px; flex: 1 1 200px; min-width: 168px; max-width: 380px; }
+.searchin {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: var(--r2);
+  padding: 7px 11px;
+  font-size: var(--fs-sm);
+  font-family: inherit;
+}
+.searchin:focus { outline: none; border-color: var(--accent); }
+.searchin::placeholder { color: var(--muted3); }
+
+.fc {
+  appearance: none;
+  width: 138px;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: var(--r2);
+  padding: 7px 24px 7px 11px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  text-overflow: ellipsis;
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 14px) calc(50% + 1px), calc(100% - 10px) calc(50% + 1px);
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+}
+.fc:hover { border-color: var(--accent); }
+/* Включённое условие обязано отличаться от выключенного на глаз, иначе «почему доска пустая» — загадка. */
+.fc_on {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  font-weight: 600;
+  background-color: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.sort {
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--muted);
+  border-radius: var(--r2);
+  padding: 7px 11px;
+  font-size: var(--fs-sm);
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sort:hover { border-color: var(--accent); color: var(--text); }
+
+.state { margin-left: auto; display: inline-flex; align-items: baseline; gap: var(--s2); font-size: var(--fs-sm); }
+.staten { color: var(--accent-ink); font-weight: 600; }
+.reset {
+  border: 0;
+  background: transparent;
+  color: var(--muted2);
+  font-size: var(--fs-sm);
+  font-family: inherit;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.reset:hover { color: var(--danger-ink); }

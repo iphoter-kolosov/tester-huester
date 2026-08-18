@@ -30,10 +30,10 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   return (
     <main className="wrap" style={{ maxWidth: 380 }}>
       <div className="h" style={{ marginTop: 40 }}>
-        <span className="h1">🔒 Dashboard</span>
+        <span className="h1">🔒 tester-huester</span>
       </div>
       <form action={login} className="login">
-        <label className="loginlbl" htmlFor="password">Password</label>
+        <label className="loginlbl" htmlFor="password">Пароль</label>
         <input
           id="password"
           name="password"
@@ -43,11 +43,11 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
           className="logininput"
           placeholder="••••••••"
         />
-        {e ? <div className="loginerr">Wrong password.</div> : null}
-        <button type="submit" className="loginbtn">Sign in</button>
+        {e ? <div className="loginerr">Неверный пароль.</div> : null}
+        <button type="submit" className="loginbtn">Войти</button>
       </form>
       <p style={{ color: 'var(--muted)', fontSize: 12, marginTop: 16 }}>
-        Agents and the extension don&apos;t need this — only the human dashboard is gated.
+        Агентам и расширению вход не нужен — паролем закрыта только панель.
       </p>
     </main>
   )

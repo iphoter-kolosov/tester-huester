@@ -1,0 +1,197 @@
+/* Примитивы панели. Один модуль на всю папку: это один набор деталей, и правило про плашку статуса должно
+   лежать рядом с правилом про чип агента, а не в семи файлах.
+   Цвета — только токенами из globals.css. */
+
+/* ── счётчик ────────────────────────────────────────────────────────────────────────────────────────── */
+.count {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  border-radius: 999px;
+  padding: 1px 7px;
+  min-width: 20px;
+  text-align: center;
+  background: color-mix(in srgb, var(--border-strong) 55%, transparent);
+  color: var(--text);
+}
+/* Единственный тон, которым разрешено кричать. */
+.count_attention { background: var(--attention); color: var(--on-solid); }
+.count_quiet { background: transparent; border: 1px solid var(--border); color: var(--muted2); }
+.count_zero { background: transparent; border: 1px solid var(--border); color: var(--muted3); font-weight: 400; }
+
+/* ── плашка статуса ─────────────────────────────────────────────────────────────────────────────────── */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  white-space: nowrap;
+  color: var(--muted);
+  background: var(--panel);
+}
+.pill_sm { padding: 1px var(--s2); font-size: 10.5px; }
+.pill_new { color: var(--accent-ink); border-color: color-mix(in srgb, var(--new) 40%, var(--border-strong)); background: color-mix(in srgb, var(--new) 7%, transparent); }
+.pill_taken { color: var(--warn-ink); border-color: color-mix(in srgb, var(--taken) 45%, var(--border-strong)); background: color-mix(in srgb, var(--taken) 9%, transparent); }
+/* Ждёт человека — заливка, а не контур. На листе таких плашек видно ровно эти. */
+.pill_needs_review { color: var(--on-solid); background: var(--attention); border-color: var(--attention); font-weight: 700; }
+.pill_verified { color: var(--verified); border-color: color-mix(in srgb, var(--verified) 45%, var(--border-strong)); background: color-mix(in srgb, var(--verified) 8%, transparent); }
+.pill_rejected { color: var(--danger-ink); border-color: color-mix(in srgb, var(--rejected) 45%, var(--border-strong)); background: color-mix(in srgb, var(--rejected) 8%, transparent); }
+.pill_wontfix { color: var(--wontfix); }
+/* Статус, которого нет в жизненном цикле, обязан выглядеть чужим, а не притворяться одним из наших. */
+.pill_unknown { color: var(--muted2); border-style: dashed; font-family: var(--font-mono); font-weight: 400; }
+
+/* ── чип агента ─────────────────────────────────────────────────────────────────────────────────────── */
+.chip {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+  max-width: 100%;
+  border: 1px solid var(--border);
+  background: var(--panel2);
+  border-radius: 999px;
+  padding: 3px 11px;
+  font-size: 12px;
+}
+a.chip:hover { border-color: var(--accent); }
+.chip_plain { border-color: transparent; background: transparent; padding: 0; }
+.chiphandle { font-family: var(--font-mono); font-size: 11.5px; font-weight: 600; color: var(--text); }
+.chiptitle { color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chiprole { color: var(--muted2); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 34ch; }
+.chiprole_none { color: var(--warn-ink); font-style: italic; }
+/* Точка — не украшение: это ответ на «кому вообще можно отдать» до того, как открыт состав. */
+.dot { width: 7px; height: 7px; border-radius: 50%; align-self: center; flex: none; }
+.dot_live { background: var(--verified); }
+.dot_quiet { background: var(--taken); }
+.dot_silent { background: var(--rejected); }
+.chip_retired { opacity: .65; }
+.chip_unknown .chiphandle { color: var(--warn-ink); }
+.chipmark { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted3); }
+
+/* ── заголовок раздела ──────────────────────────────────────────────────────────────────────────────── */
+.sec {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  padding-bottom: var(--s2);
+  margin-bottom: var(--s3);
+  border-bottom: 1px solid var(--border);
+}
+.sec_plain { border-bottom: 0; padding-bottom: 0; }
+.secttl {
+  font-family: var(--font-display);
+  font-size: var(--fs-h2);
+  font-weight: 700;
+  letter-spacing: -.015em;
+}
+.secttl_lg { font-size: var(--fs-display); }
+.sechint { color: var(--muted2); font-size: var(--fs-sm); }
+.secacts { margin-left: auto; display: inline-flex; align-items: center; gap: var(--s2); }
+
+/* ── пустое место ───────────────────────────────────────────────────────────────────────────────────── */
+.empty {
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r3);
+  background: color-mix(in srgb, var(--panel) 55%, transparent);
+  padding: var(--s7) var(--s5);
+  text-align: center;
+}
+.emptyttl { font-family: var(--font-display); font-size: var(--fs-h2); font-weight: 600; margin: 0 0 var(--s2); }
+.emptyhint { color: var(--muted); font-size: var(--fs-sm); line-height: 1.6; margin: 0 auto; max-width: var(--measure-narrow); }
+.emptyacts { margin-top: var(--s4); display: inline-flex; gap: var(--s2); }
+
+/* ── кнопка ─────────────────────────────────────────────────────────────────────────────────────────── */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border-radius: var(--r2);
+  border: 1px solid transparent;
+  padding: var(--s2) var(--s4);
+  font-family: inherit;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  line-height: 1.2;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.btn:disabled { opacity: .45; cursor: default; }
+.btn_sm { padding: 5px 10px; font-size: 12px; }
+.btn_primary { background: var(--accent); border-color: var(--accent); color: var(--on-solid); }
+.btn_primary:hover:not(:disabled) { filter: brightness(1.12); }
+/* Приёмка работы — зелёная и одна на экран. */
+.btn_accept { background: var(--verified); border-color: var(--verified); color: var(--on-solid); font-weight: 700; }
+.btn_accept:hover:not(:disabled) { filter: brightness(1.1); }
+.btn_ghost { background: var(--panel); border-color: var(--border-strong); color: var(--text); }
+.btn_ghost:hover:not(:disabled) { border-color: var(--accent); }
+.btn_quiet { background: transparent; border-color: transparent; color: var(--muted); }
+.btn_quiet:hover:not(:disabled) { color: var(--text); background: var(--panel2); }
+.btn_danger { background: transparent; border-color: color-mix(in srgb, var(--rejected) 45%, var(--border-strong)); color: var(--danger-ink); }
+.btn_danger:hover:not(:disabled) { background: color-mix(in srgb, var(--rejected) 10%, transparent); border-color: var(--rejected); }
+
+/* ── строка тикета ──────────────────────────────────────────────────────────────────────────────────── */
+.trow {
+  display: grid;
+  grid-template-columns: 120px minmax(0, 1fr) auto;
+  gap: var(--s4);
+  align-items: start;
+  padding: var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--r3);
+  background: var(--panel);
+  box-shadow: var(--shadow-1);
+  transition: border-color .12s;
+}
+.trow:hover { border-color: var(--border-strong); }
+.trow_dimmed { opacity: .62; }
+/* Тикет, который ждёт ЕГО: полоса слева единственным цветом внимания. */
+.trow_attention {
+  border-color: color-mix(in srgb, var(--attention) 42%, var(--border));
+  box-shadow: inset 4px 0 0 var(--attention), var(--shadow-1);
+}
+.trow_attention:hover { border-color: var(--attention); }
+.trowshot { display: block; }
+.trowthumb {
+  width: 120px; height: 78px;
+  object-fit: cover;
+  border-radius: var(--r1);
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  display: block;
+}
+.trownoshot {
+  width: 120px; height: 78px;
+  border-radius: var(--r1);
+  background: var(--panel2);
+  border: 1px dashed var(--border-strong);
+  display: grid; place-items: center;
+  color: var(--muted3);
+  font-size: 20px;
+}
+.trowmid { min-width: 0; display: flex; flex-direction: column; gap: 5px; }
+.trowttl {
+  font-weight: 600;
+  font-size: var(--fs-body);
+  line-height: 1.4;
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: var(--measure);
+}
+a.trowttl:hover { color: var(--accent); }
+.trowmeta { color: var(--muted2); font-size: 12px; display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
+.trowaside { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+
+@media (max-width: 760px) {
+  .trow { grid-template-columns: 84px minmax(0, 1fr); }
+  .trowthumb, .trownoshot { width: 84px; height: 56px; }
+  .trowaside { grid-column: 1 / -1; align-items: flex-start; }
+}

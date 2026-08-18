@@ -1,6 +1,10 @@
 'use client'
-import { useState } from 'react'
+import { useState, type KeyboardEvent } from 'react'
+import type { ChangeEvent } from 'react'
 import { useRouter } from 'next/navigation'
+import Button from '@/components/ui/Button'
+import { cx } from '@/lib/cx'
+import s from '@/app/agents/roster.module.css'
 
 /**
  * The owner's half of a roster entry: what we call this agent and what it is FOR.
@@ -9,9 +13,22 @@ import { useRouter } from 'next/navigation'
  * the only one who knows what each one is meant to do. A role nobody can correct is a role that rots, and every
  * other agent reads it before addressing work, so the correction has to live where the roster is read.
  *
+ * The two fields ARE the card's heading and its sentence, not a form bolted underneath: the roster has to read
+ * like a page of descriptions, and a page that also happens to be editable beats a page of input boxes.
+ *
  * The limits come in as props: they are decided in @th/db, and a client component cannot import from there
  * without dragging node:sqlite into the browser bundle (see status.ts for the same constraint).
  */
+
+const NAME_PLACEHOLDER = 'Без имени — впишите, как называете его в разговоре'
+const ROLE_PLACEHOLDER = 'Что делает и за что отвечает — это читают перед тем, как отдать сюда работу'
+
+// Поле роли растёт под текст, а не прокручивается: роль длиной до 600 знаков (предел ядра) обязана быть
+// видна целиком, иначе её никто не перечитывает и она тихо устаревает. Числа — под ширину --measure.
+const ROLE_CHARS_PER_ROW = 88
+const ROLE_MIN_ROWS = 2
+const ROLE_MAX_ROWS = 8
+
 export default function AgentEditor({
   handle,
   title,
@@ -72,46 +89,66 @@ export default function AgentEditor({
     return patch({ active: !active })
   }
 
-  const onEnter = (e: React.KeyboardEvent<HTMLInputElement>): void => {
+  // Enter — сохранить, и в поле роли тоже: ядро всё равно вырезает переводы строк, так что перевод строки
+  // здесь был бы обещанием формы, которого хранилище не держит.
+  const onEnter = (e: KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>): void => {
     if (e.key === 'Enter') {
       e.preventDefault()
       save()
     }
   }
 
+  const onRole = (e: ChangeEvent<HTMLTextAreaElement>): void => {
+    setR(e.target.value)
+    setSaved(false)
+  }
+
+  // Подсказка в покое проявляется только под курсором (см. .edhint_idle): на семи карточках подряд она была
+  // семью одинаковыми строчками, то есть шумом, а нужна ровно в тот момент, когда рука уже над карточкой.
+  const idle = !dirty && !saved
+  const hint = saved && !dirty ? 'Сохранено ✓' : dirty ? 'Не сохранено · Enter сохраняет' : 'Имя и роль правятся прямо здесь'
+
   return (
-    <div className="aged">
+    <div className={s.ed}>
       <input
-        className="agedin agedname"
+        className={cx(s.edin, s.edname)}
         value={t}
         maxLength={maxTitle}
-        placeholder="Как называем в разговоре"
+        placeholder={NAME_PLACEHOLDER}
+        aria-label={`Имя агента ${handle}`}
         disabled={busy}
         onChange={(e) => { setT(e.target.value); setSaved(false) }}
         onKeyDown={onEnter}
       />
-      {/* One line, not a textarea: the core strips newlines because the roster renders one line per agent, and a
-          box that accepts paragraphs would promise a shape the store does not keep. */}
-      {/* A role longer than the field is clipped by the input, so the whole of it is on hover — the owner must be
-          able to READ what is written there without clicking into it and scrolling. */}
-      <input
-        className="agedin agedrole"
+      <span className={s.edlbl}>роль</span>
+      {/* Переносится по ширине, но остаётся ОДНОЙ строкой: ядро вырезает переводы строк, а роль — то самое
+          предложение, которое владелец читает, решая, чья это задача. Однострочное поле обрезало её на
+          середине, и прочесть можно было только наведением — то есть нельзя. */}
+      <textarea
+        className={cx(s.edin, s.edrole)}
         value={r}
-        title={r}
+        rows={Math.min(ROLE_MAX_ROWS, Math.max(ROLE_MIN_ROWS, Math.ceil(r.length / ROLE_CHARS_PER_ROW)))}
         maxLength={maxRole}
-        placeholder="Что делает и за что отвечает — это читают другие агенты перед тем, как адресовать работу"
+        placeholder={ROLE_PLACEHOLDER}
+        aria-label={`Роль агента ${handle}`}
         disabled={busy}
-        onChange={(e) => { setR(e.target.value); setSaved(false) }}
+        onChange={onRole}
         onKeyDown={onEnter}
       />
-      <div className="agedfoot">
-        <span className="agedhint">{saved && !dirty ? 'Сохранено ✓' : dirty ? 'Не сохранено · Enter' : ''}</span>
-        <button className="agedbtn" disabled={!dirty || busy} onClick={save}>Сохранить</button>
-        <button className="agedbtn agedretire" disabled={busy} onClick={toggleActive}>
+      <div className={s.edfoot}>
+        <span className={cx(s.edhint, idle && s.edhint_idle, dirty && s.edhint_dirty, saved && !dirty && s.edhint_saved)}>
+          {hint}
+        </span>
+        {dirty ? (
+          <Button variant="primary" size="sm" disabled={busy} onClick={save}>
+            Сохранить
+          </Button>
+        ) : null}
+        <Button variant="quiet" size="sm" disabled={busy} onClick={toggleActive}>
           {active ? 'В отставку' : 'Вернуть в строй'}
-        </button>
+        </Button>
       </div>
-      {err ? <div className="agederr">{err}</div> : null}
+      {err ? <div className={s.ederr}>{err}</div> : null}
     </div>
   )
 }

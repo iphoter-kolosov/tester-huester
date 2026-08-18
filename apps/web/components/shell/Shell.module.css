@@ -1,0 +1,102 @@
+/* Каркас панели: слева рельса, справа всё остальное во всю ширину монитора.
+   Ни одного цвета числом — только токены из globals.css. */
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--rail-w) minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.rail {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: var(--s5);
+  padding: var(--s5) var(--s4) var(--s4);
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-family: var(--font-display);
+  font-size: var(--fs-h2);
+  font-weight: 700;
+  letter-spacing: -.02em;
+  color: var(--text);
+}
+.brandmark { border-radius: 7px; display: block; }
+
+.group { display: flex; flex-direction: column; gap: 2px; }
+.groupttl {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+  color: var(--muted3);
+  padding: 0 var(--s2) var(--s1);
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  padding: var(--s2) var(--s3);
+  border-radius: var(--r2);
+  color: var(--muted);
+  font-size: var(--fs-body);
+  font-weight: 500;
+  border: 1px solid transparent;
+}
+.item:hover { color: var(--text); background: var(--panel2); }
+/* Текущее место — залито бумагой и подчёркнуто слева: чтобы понять, где ты, не нужно читать адресную строку. */
+.item.on {
+  color: var(--text);
+  background: var(--bg);
+  border-color: var(--border);
+  font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.label { flex: 1; min-width: 0; }
+
+/* «Мой ход» с непустой очередью — единственный пункт, который имеет право светиться. */
+.item.waiting { color: var(--attention-ink); }
+.item.waiting.on { box-shadow: inset 3px 0 0 var(--attention); }
+
+.tail { margin-top: auto; display: flex; flex-direction: column; gap: 2px; }
+.quiet { color: var(--muted2); font-size: var(--fs-sm); }
+.note {
+  color: var(--muted3);
+  font-size: var(--fs-xs);
+  line-height: 1.45;
+  padding: var(--s2) var(--s2) 0;
+  border-top: 1px solid var(--border);
+  margin-top: var(--s2);
+}
+
+.main { min-width: 0; }
+
+/* Узкий экран: рельса ложится сверху полосой, содержимое остаётся во всю ширину. */
+@media (max-width: 900px) {
+  .shell { grid-template-columns: minmax(0, 1fr); }
+  .rail {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: var(--s3);
+    padding: var(--s3) var(--gutter);
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+  .group { flex-direction: row; gap: var(--s1); }
+  .groupttl { display: none; }
+  .tail { margin-top: 0; margin-left: auto; flex-direction: row; }
+  .note { display: none; }
+}

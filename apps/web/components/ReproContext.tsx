@@ -12,11 +12,11 @@ export default function ReproContext({ context }: { context: ReproBundle & { dia
   const net = context.network ?? []
   const diag = context.diag
   const tabs = [
-    { key: 'steps', label: 'Steps', n: actions.length },
-    { key: 'console', label: 'Console', n: cons.length },
-    { key: 'network', label: 'Network', n: net.length },
-    { key: 'env', label: 'Env', n: 0 },
-    ...(diag ? [{ key: 'diag', label: 'Recorder', n: 0 }] : []),
+    { key: 'steps', label: 'Шаги', n: actions.length },
+    { key: 'console', label: 'Консоль', n: cons.length },
+    { key: 'network', label: 'Сеть', n: net.length },
+    { key: 'env', label: 'Окружение', n: 0 },
+    ...(diag ? [{ key: 'diag', label: 'Рекордер', n: 0 }] : []),
   ].filter((t) => t.key === 'env' || t.key === 'diag' || t.n > 0)
   const [tab, setTab] = useState(tabs[0]?.key ?? 'env')
   if (tabs.length === 0) return null
@@ -25,8 +25,8 @@ export default function ReproContext({ context }: { context: ReproBundle & { dia
   return (
     <div className="ctx">
       <div className="ctxhead">
-        <span className="ctxttl">Repro context</span>
-        {errors > 0 && <span className="ctxerr">{errors} error{errors > 1 ? 's' : ''}</span>}
+        <span className="ctxttl">🔁 Как воспроизвести</span>
+        {errors > 0 && <span className="ctxerr">{errors} ошибок в консоли</span>}
       </div>
       <div className="ctxtabs">
         {tabs.map((t) => (
@@ -48,7 +48,7 @@ export default function ReproContext({ context }: { context: ReproBundle & { dia
 }
 
 function Steps({ actions }: { actions: ActionStep[] }) {
-  if (!actions.length) return <div className="ctxempty">No recorded actions.</div>
+  if (!actions.length) return <div className="ctxempty">Шаги не записаны.</div>
   return (
     <ol className="steps">
       {actions.map((a, i) => (
@@ -124,16 +124,16 @@ function DiagView({ diag }: { diag: Record<string, unknown> }) {
 }
 
 function EnvView({ env }: { env: ReproBundle['env'] }) {
-  if (!env) return <div className="ctxempty">No environment captured.</div>
+  if (!env) return <div className="ctxempty">Окружение не записано.</div>
   const rows: [string, string | undefined][] = [
-    ['URL', env.url],
-    ['Browser', env.browser],
-    ['OS', env.os],
-    ['Viewport', env.viewport],
+    ['Адрес', env.url],
+    ['Браузер', env.browser],
+    ['Система', env.os],
+    ['Окно', env.viewport],
     ['DPR', env.dpr != null ? String(env.dpr) : undefined],
-    ['Timezone', env.timezone],
-    ['Languages', env.languages?.join(', ')],
-    ['Connection', env.connection],
+    ['Часовой пояс', env.timezone],
+    ['Языки', env.languages?.join(', ')],
+    ['Связь', env.connection],
     ['User agent', env.userAgent],
   ]
   return (
@@ -154,14 +154,14 @@ function describeStep(a: ActionStep): string {
   const via = a.selector.role ? `${a.selector.role} "${target}"` : `"${target}"`
   switch (a.type) {
     case 'click':
-      return `Click ${via}`
+      return `Нажать ${via}`
     case 'input':
     case 'change':
-      return `Type ${a.value ? `"${a.value}" ` : ''}into ${via}`
+      return `Ввести ${a.value ? `«${a.value}» ` : ''}в ${via}`
     case 'submit':
-      return `Submit ${via}`
+      return `Отправить ${via}`
     case 'key':
-      return `Press ${a.key} on ${via}`
+      return `Нажать ${a.key} на ${via}`
     default:
       return `${a.type} ${via}`
   }

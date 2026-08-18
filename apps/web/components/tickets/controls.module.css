@@ -1,0 +1,205 @@
+/* Органы управления тикетом: статус, адресат, свойства. Один модуль на всю папку — это один набор органов,
+   и правило про выпадающий статус должно лежать рядом с правилом про передачу работы.
+   Цвета — только токенами из globals.css. */
+
+/* ── общий выпадающий список ────────────────────────────────────────────────────────────────────────── */
+.sel {
+  appearance: none;
+  width: 100%;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: var(--r1);
+  padding: 5px 22px 5px 9px;
+  font-size: 12px;
+  font-weight: 600;
+  font-family: inherit;
+  line-height: 1.3;
+  cursor: pointer;
+  /* Каретка нарисована фоном: системная стрелка у select разной ширины в разных браузерах, и колонка
+     статусов переставала выстраиваться по вертикали именно из-за неё. */
+  background-image: linear-gradient(45deg, transparent 50%, currentColor 50%), linear-gradient(135deg, currentColor 50%, transparent 50%);
+  background-position: calc(100% - 12px) calc(50% + 1px), calc(100% - 8px) calc(50% + 1px);
+  background-size: 4px 4px, 4px 4px;
+  background-repeat: no-repeat;
+}
+.sel:hover:not(:disabled) { border-color: var(--accent); }
+.sel:disabled { opacity: .55; cursor: default; }
+
+/* ── статус ─────────────────────────────────────────────────────────────────────────────────────────── */
+/* Это ОРГАН, а не надпись: у него рамка и каретка. Тона повторяют плашку статуса (ui.module.css) — одно
+   состояние обязано выглядеть одинаково, читают его или меняют. */
+.st_new { color: var(--accent-ink); border-color: color-mix(in srgb, var(--new) 40%, var(--border-strong)); }
+.st_taken { color: var(--warn-ink); border-color: color-mix(in srgb, var(--taken) 45%, var(--border-strong)); }
+/* Единственный статус, который ждёт человека, — единственная залитая плашка в списке. */
+.st_needs_review {
+  color: var(--on-solid);
+  background-color: var(--attention);
+  border-color: var(--attention);
+  font-weight: 700;
+}
+.st_verified { color: var(--fixed); border-color: color-mix(in srgb, var(--verified) 45%, var(--border-strong)); }
+.st_rejected { color: var(--danger-ink); border-color: color-mix(in srgb, var(--rejected) 50%, var(--border-strong)); }
+.st_wontfix { color: var(--wontfix); }
+.st_unknown { color: var(--muted2); border-style: dashed; font-family: var(--font-mono); font-weight: 400; }
+
+/* ── передача работы ────────────────────────────────────────────────────────────────────────────────── */
+.assign { position: relative; }
+/* Пока список открыт, строка обязана лежать выше следующих: иначе список уходит ПОД соседний тикет. */
+.assign_open { z-index: 40; }
+
+.assignbtn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: var(--r1);
+  padding: 5px 9px;
+  font-size: 12px;
+  font-family: inherit;
+  line-height: 1.3;
+  text-align: left;
+  cursor: pointer;
+  /* Колонка узкая, а handle бывает длинным: имя обрезается, но строка остаётся ОДНОЙ — иначе соседние
+     строки перестают выстраиваться по вертикали, ради которой колонка и заведена. */
+  white-space: nowrap;
+  overflow: hidden;
+}
+.assignwho { min-width: 0; overflow: hidden; }
+.assignbtn:hover:not(:disabled) { border-color: var(--accent); }
+.assignbtn:disabled { opacity: .55; cursor: default; }
+/* Никому не адресовано — это дыра в работе, а не значение по умолчанию: пунктир, чтобы её было видно. */
+.assignbtn_empty { border-style: dashed; color: var(--muted2); font-style: italic; }
+.assigncaret { margin-left: auto; color: var(--muted3); font-size: 9px; }
+
+/* Ловушка кликов мимо списка. Прозрачная и на весь экран — закрывать список крестиком в плотной строке
+   некуда, а «закрылось само, когда я щёлкнул в другом месте» — то, чего ждут от выпадающего списка. */
+.veil { position: fixed; inset: 0; z-index: 39; }
+
+.pop {
+  position: absolute;
+  z-index: 41;
+  top: calc(100% + 5px);
+  right: 0;
+  width: 340px;
+  max-width: min(340px, calc(100vw - 2 * var(--gutter)));
+  max-height: 60vh;
+  overflow-y: auto;
+  padding: var(--s2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r2);
+  background: var(--panel);
+  box-shadow: var(--shadow-2);
+}
+.popttl {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--muted3);
+  padding: var(--s1) var(--s2) var(--s2);
+}
+.popopt {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  border: 1px solid transparent;
+  background: transparent;
+  border-radius: var(--r1);
+  padding: 6px var(--s2);
+  font-family: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.popopt:hover:not(:disabled) { background: var(--panel2); border-color: var(--border); }
+.popopt:disabled { cursor: default; }
+.popopt_on { background: var(--panel2); border-color: var(--border-strong); }
+.optrole {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--muted2);
+  padding-left: 13px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* Роль — условие передачи: агент без неё не сможет сам передать работу дальше, и владелец должен это видеть. */
+.optrole_none { color: var(--warn-ink); font-style: italic; }
+.popsep { height: 1px; background: var(--border); margin: var(--s2) var(--s2); }
+.popfoot { display: flex; align-items: center; gap: var(--s2); padding: var(--s1) var(--s2) 0; }
+.popclear {
+  border: 0;
+  background: transparent;
+  color: var(--muted2);
+  font-family: inherit;
+  font-size: 12px;
+  padding: 4px 0;
+  cursor: pointer;
+}
+.popclear:hover:not(:disabled) { color: var(--danger-ink); }
+.poplink { margin-left: auto; font-size: 12px; color: var(--accent); }
+.poplink:hover { text-decoration: underline; }
+.popoff { padding: var(--s2) var(--s2) 0; font-size: 11.5px; line-height: 1.5; color: var(--muted2); }
+.popempty { padding: var(--s2); font-size: 12.5px; line-height: 1.5; color: var(--warn-ink); }
+
+/* ── свойства тикета (страница тикета) ──────────────────────────────────────────────────────────────── */
+.props { display: flex; flex-direction: column; gap: var(--s3); }
+.proprow { display: grid; grid-template-columns: 84px minmax(0, 1fr); gap: var(--s3); align-items: center; }
+.propk { font-size: var(--fs-sm); color: var(--muted2); }
+.propacts { display: flex; gap: var(--s2); flex-wrap: wrap; }
+
+/* ── слово владельца ────────────────────────────────────────────────────────────────────────────────── */
+/* Показывается только пока тикет ждёт вердикта. Постоянно висящая пара кнопок «принять / вернуть» на
+   тикете, который никто не сдавал, — это приглашение закрыть работу, которой не было. */
+.verdict {
+  margin: var(--s3) 0 var(--s5);
+  padding: var(--s3) 15px;
+  border: 1px solid color-mix(in srgb, var(--attention) 50%, var(--border));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--attention) 10%, transparent);
+  border-radius: var(--r3);
+  background: var(--panel);
+}
+.verdicthead { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.verdictttl { font-weight: 700; font-size: var(--fs-sm); color: var(--attention-ink); }
+.verdictsub { font-size: 11.5px; color: var(--muted2); }
+.verdictacts { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; }
+.verdictreason { margin-top: 10px; }
+.verdictta {
+  width: 100%;
+  min-height: 76px;
+  padding: 10px var(--s3);
+  background: var(--panel);
+  border: 1px solid color-mix(in srgb, var(--rejected) 40%, var(--border-strong));
+  border-radius: var(--r2);
+  color: var(--text);
+  font: inherit;
+  line-height: 1.45;
+  resize: vertical;
+  outline: none;
+}
+.verdictta:focus { border-color: var(--rejected); }
+.verdictfoot { display: flex; align-items: center; gap: 10px; margin-top: var(--s2); }
+.verdicthint { color: var(--muted2); font-size: 12px; margin-right: auto; }
+
+/* ── отказ сервера ──────────────────────────────────────────────────────────────────────────────────── */
+/* pre-wrap: сообщение об отказе приходит несколькими строками (список ролей внутри), и склеенное в одну
+   строку оно перестаёт быть списком. */
+.err {
+  margin-top: 6px;
+  padding: 7px var(--s2);
+  border: 1px solid color-mix(in srgb, var(--rejected) 45%, var(--border));
+  background: color-mix(in srgb, var(--rejected) 8%, transparent);
+  border-radius: var(--r1);
+  color: var(--danger-ink);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  text-align: left;
+}

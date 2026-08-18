@@ -1,0 +1,142 @@
+/* Экран «Настройка»: проекты и ключи. Открывается редко — значит объясняет много.
+   Цвета — только токенами из globals.css. */
+
+.lead {
+  color: var(--muted);
+  font-size: var(--fs-sm);
+  line-height: 1.65;
+  max-width: var(--measure);
+  margin: 0 0 var(--s5);
+}
+
+.warn {
+  border: 1px dashed color-mix(in srgb, var(--taken) 45%, var(--border));
+  background: color-mix(in srgb, var(--taken) 8%, transparent);
+  border-radius: var(--r2);
+  padding: 9px var(--s3);
+  margin-bottom: var(--s4);
+  font-size: 12.5px;
+  color: var(--warn-ink);
+  max-width: var(--measure);
+}
+
+/* ── проект ─────────────────────────────────────────────────────────────────────────────────────────── */
+.projects { display: flex; flex-direction: column; gap: var(--s4); margin-bottom: var(--s6); }
+.proj {
+  border: 1px solid var(--border);
+  border-radius: var(--r3);
+  background: var(--panel);
+  box-shadow: var(--shadow-1);
+  padding: var(--s4);
+}
+.projhead { display: flex; align-items: baseline; gap: var(--s3); flex-wrap: wrap; margin-bottom: var(--s3); }
+.projname { font-family: var(--font-display); font-size: var(--fs-h2); font-weight: 700; letter-spacing: -.015em; }
+.projmeta { color: var(--muted2); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; }
+.projlink { margin-left: auto; font-size: var(--fs-sm); color: var(--muted2); }
+.projlink:hover { color: var(--accent); }
+
+/* ── ключ ───────────────────────────────────────────────────────────────────────────────────────────── */
+/* Ширина ограничена, хотя панель полноэкранная: это форма, а не список. Растянутая на весь монитор
+   строка ключа заставляет глаз ехать от подписи к значению через пустое поле. */
+.keys { display: flex; flex-direction: column; gap: var(--s2); max-width: 940px; }
+.key {
+  display: grid;
+  grid-template-columns: 148px minmax(0, 1fr);
+  gap: 2px var(--s4);
+  align-items: center;
+  padding: var(--s3);
+  border: 1px solid var(--border);
+  border-radius: var(--r2);
+  background: var(--panel2);
+}
+.keyk { font-size: var(--fs-xs); font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--muted3); }
+.keyline { display: flex; align-items: center; gap: var(--s2); flex-wrap: wrap; min-width: 0; }
+.keyv {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--r1);
+  padding: 4px var(--s2);
+  word-break: break-all;
+  user-select: all;
+  min-width: 22ch;
+}
+.keyv_masked { color: var(--muted2); user-select: none; letter-spacing: .04em; }
+.keyhint { grid-column: 2; margin: 0; font-size: var(--fs-xs); color: var(--muted2); line-height: 1.5; max-width: var(--measure-narrow); }
+.keyerr { grid-column: 2; margin: 0; font-size: var(--fs-xs); color: var(--danger-ink); line-height: 1.5; }
+.keyenv { font-family: var(--font-mono); color: var(--muted); }
+
+/* Смена ключа спрятана под «замок» намеренно: это необратимое действие, которое ломает работающего агента,
+   и оно не должно стоять кнопкой рядом с безобидным «копировать». */
+.rot { grid-column: 2; margin-top: var(--s2); }
+.rotsum { cursor: pointer; font-size: var(--fs-xs); font-weight: 600; color: var(--muted2); }
+.rotsum:hover { color: var(--danger-ink); }
+.rotbody {
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin-top: var(--s2);
+  padding: var(--s2) var(--s3);
+  border: 1px solid color-mix(in srgb, var(--rejected) 40%, var(--border));
+  background: color-mix(in srgb, var(--rejected) 6%, transparent);
+  border-radius: var(--r2);
+}
+.rottext { font-size: 12px; line-height: 1.5; color: var(--danger-ink); flex: 1; min-width: 24ch; }
+.keylessact { margin-top: var(--s2); }
+.keyless {
+  grid-column: 1 / -1;
+  border: 1px dashed color-mix(in srgb, var(--rejected) 45%, var(--border));
+  border-radius: var(--r2);
+  padding: 9px var(--s3);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--danger-ink);
+}
+
+/* ── новый проект ───────────────────────────────────────────────────────────────────────────────────── */
+.newproj {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  padding: var(--s4);
+  border: 1px solid var(--border);
+  border-radius: var(--r3);
+  background: var(--panel);
+  box-shadow: var(--shadow-1);
+}
+.newin {
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  color: var(--text);
+  border-radius: var(--r2);
+  padding: 7px var(--s3);
+  font-size: var(--fs-body);
+  font-family: inherit;
+  width: 240px;
+}
+.newin:focus { outline: none; border-color: var(--accent); }
+.newhint { font-size: var(--fs-xs); color: var(--muted2); flex-basis: 100%; line-height: 1.55; max-width: var(--measure); margin: 0; }
+
+/* ── низ экрана: то, что нужно ещё реже ─────────────────────────────────────────────────────────────── */
+.foot {
+  margin-top: var(--s6);
+  padding-top: var(--s3);
+  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: baseline;
+  gap: var(--s4);
+  flex-wrap: wrap;
+  font-size: var(--fs-sm);
+  color: var(--muted2);
+}
+.footlink { color: var(--muted2); }
+.footlink:hover { color: var(--accent); }
+
+@media (max-width: 760px) {
+  .key { grid-template-columns: minmax(0, 1fr); }
+  .keyhint, .keyerr, .rot { grid-column: 1; }
+}

@@ -639,6 +639,16 @@ export const repo = {
   deleteComment(id: string): boolean {
     return db().prepare('DELETE FROM comments WHERE id = ?').run(id).changes > 0
   },
+  // Кто вообще подавал голос в обсуждениях — одним запросом. Экран состава раньше выяснял это, перебирая
+  // комментарии КАЖДОГО тикета: на живой доске в 380 тикетов это 380 запросов на одну загрузку страницы.
+  // Ответ здесь один и тот же, а стоит он один запрос.
+  commentAuthors(authorKind?: AuthorKind): { author: string; authorKind: AuthorKind; lastAt: number }[] {
+    const rows = authorKind
+      ? db().prepare('SELECT author, author_kind, MAX(created_at) last_at FROM comments WHERE author_kind = ? GROUP BY author, author_kind').all(authorKind)
+      : db().prepare('SELECT author, author_kind, MAX(created_at) last_at FROM comments GROUP BY author, author_kind').all()
+    return (rows as any[]).map((r) => ({ author: r.author, authorKind: (r.author_kind ?? 'human') as AuthorKind, lastAt: r.last_at }))
+  },
+
   countComments(reportId: string): number {
     const r = db().prepare('SELECT COUNT(*) c FROM comments WHERE report_id = ?').get(reportId) as { c: number }
     return r?.c ?? 0
