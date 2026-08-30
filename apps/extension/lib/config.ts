@@ -14,7 +14,9 @@ const ENV_COLLECTOR =
 export const DEFAULTS: Config = {
   collectorUrl: ENV_COLLECTOR || 'http://localhost:4319',
   ingestKey: 'th_demo_key_0001',
-  recordReplay: true, // continuously buffer the last ~2 min of DOM replay (mask-by-default); opt-out in the popup
+  recordReplay: false, // предзапись DOM-реплея выключена по умолчанию: владелец её не использует и предпочитает
+                       // явную запись репро. Не удалена — включается галочкой в попапе. Явная запись (видео
+                       // вкладки) от этого флага не зависит и работает всегда.
   lastProjectId: '',
 }
 
