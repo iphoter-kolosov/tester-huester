@@ -75,7 +75,10 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   // Journalled so the other side notices without polling the whole board — this is how an agent learns the
   // reporter answered it. The journal records the identity, not the display name, so an agent filtering by actor
   // sees one owner and one handle per agent.
-  repo.logEvent({ projectId: r.report.projectId, reportId: r.report.id, kind: 'comment', actor: speaker.identity, detail: text.slice(0, 200) })
+  // The session the agent declares, so a comment posted by a remote fork records which one — same write-origin the
+  // status path stamps. Null for the owner (cookie, no MCP session) and for old clients that send none.
+  const writeSession = r.kind === 'agent' && typeof body.session === 'string' && body.session.trim() ? body.session.trim() : null
+  repo.logEvent({ projectId: r.report.projectId, reportId: r.report.id, kind: 'comment', actor: speaker.identity, detail: text.slice(0, 200), session: writeSession })
   return NextResponse.json({ ok: true, comment, agent: r.kind === 'agent' ? speaker.identity : null })
 }
 

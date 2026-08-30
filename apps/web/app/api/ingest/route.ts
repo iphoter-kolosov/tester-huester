@@ -1,6 +1,6 @@
 import crypto from 'node:crypto'
 import { NextResponse } from 'next/server'
-import { repo, checkAssignee, checkHandover, resolveSpeaker, MAX_ATTACHMENTS, IDENTITY_EXTENSION, type Attachment, type ReportType, type Severity } from '@th/db'
+import { repo, checkAssignee, checkHandover, resolveSpeaker, MAX_ATTACHMENTS, IDENTITY_EXTENSION, IDENTITY_OWNER, type Attachment, type ReportType, type Severity } from '@th/db'
 import { storage } from '@/lib/storage'
 
 export const runtime = 'nodejs'
@@ -110,10 +110,11 @@ export async function POST(req: Request) {
   }
 
   // WHO filed this, as a structured identity, and who it is FOR. An agent filing a ticket for another agent
-  // declares both; the extension declares neither, and a capture with no declared filer is the extension's own —
-  // which is the truth, and is what the journal records instead of the flat "extension" it used to claim for
-  // every row regardless of origin.
-  const filer = resolveSpeaker(body.creator, IDENTITY_EXTENSION)
+  // declares both. A capture that declares no filer is the OWNER's — he is the one holding the extension and
+  // pressing the button, so he is recorded as the filer, which is what lets him VERIFY his own ticket (only the
+  // filer or the owner may). The channel it came through is not lost: `via` below records the extension. The old
+  // fallback made the filer 'extension', an identity nobody can act as, which is why owner captures sat unclosable.
+  const filer = resolveSpeaker(body.creator, IDENTITY_OWNER)
   const creator = filer.identity
   // Registered before the address is judged, so an agent filing its first task is already on the roster and may
   // address the ticket back to itself.
@@ -240,6 +241,9 @@ export async function POST(req: Request) {
     note,
     creator,
     assignee,
+    // Everything through this endpoint arrived by the extension; recording the channel keeps the provenance the
+    // owner-as-filer change would otherwise erase.
+    via: IDENTITY_EXTENSION,
     screenshotUrl,
     pageUrl: clip(body.pageUrl, 2000),
     viewport: clip(body.viewport, 40),
@@ -256,6 +260,9 @@ export async function POST(req: Request) {
     severity: asSeverity(body.severity),
   })
 
-  repo.logEvent({ projectId: targetProjectId, reportId: row.id, kind: 'created', actor: creator, detail: (note || '(без заметки)').slice(0, 120) })
+  // An agent filing through create_task declares its session, so even the ticket's birth records which fork filed
+  // it. The browser extension sends none (it is a channel, not a process), so a capture's 'created' stays null.
+  const writeSession = typeof body.session === 'string' && body.session.trim() ? body.session.trim() : null
+  repo.logEvent({ projectId: targetProjectId, reportId: row.id, kind: 'created', actor: creator, detail: (note || '(без заметки)').slice(0, 120), session: writeSession })
   return NextResponse.json({ ok: true, id: row.id, creator, assignee, attachments: row.attachments.length }, { headers: CORS })
 }

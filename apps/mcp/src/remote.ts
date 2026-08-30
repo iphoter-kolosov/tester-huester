@@ -6,6 +6,7 @@ import {
   buildInstructions,
   normalizeIdentity,
   type AgentProfile,
+  type AgentSession,
   type IdentityView,
   type Report,
   type RosterView,
@@ -33,8 +34,12 @@ import {
   REGISTER_AGENT_DOC,
   REGISTER_NEEDS_FIELDS,
   REGISTER_NEEDS_IDENTITY,
+  SESSION_ENDPOINT,
   SET_STATUS_DOC,
   SEVERITY,
+  mintSession,
+  sessionCollisionWarning,
+  sessionEndpointUnavailable,
   SINCE_DOC,
   STATUS,
   SUBMIT_REPORT_DOC,
@@ -79,6 +84,12 @@ const BASE = (process.env.TH_COLLECTOR || '').replace(/\/+$/, '')
 const KEY = process.env.TH_PROJECT_KEY || ''
 const INGEST_KEY = process.env.TH_INGEST_KEY || ''
 const ENV_IDENTITY = normalizeIdentity(process.env.TH_AGENT)
+
+// This process's session fingerprint — minted once, kept for its life, the same helper the local server uses so
+// the two are indistinguishable in how they name a session. The collector, which owns the sessions table, is told
+// about it through SESSION_ENDPOINT; every write also carries the id so the journal records which fork wrote it.
+const SESSION = mintSession()
+
 if (!BASE) console.error('[mcp-remote] TH_COLLECTOR is not set (e.g. https://qa.ihor.work) — every call will fail.')
 if (!KEY) console.error('[mcp-remote] TH_PROJECT_KEY is not set (the project read_key thr_…) — every call will fail.')
 
@@ -158,17 +169,20 @@ const said = (r: SendResult): string => (r.ok ? r.body : r.text)
 async function send(
   path: string,
   payload: Record<string, unknown>,
-  opts: { method?: 'PATCH' | 'POST'; auth?: Auth } = {},
+  opts: { method?: 'PATCH' | 'POST'; auth?: Auth; timeoutMs?: number } = {},
 ): Promise<SendResult> {
   const auth: Auth = opts.auth ?? 'projectKey'
   const url = new URL(BASE + path)
   if (auth === 'projectKey') url.searchParams.set('projectKey', KEY)
   let res: Response
   try {
+    // No deadline by default — an agent write must complete, not be cut off. A caller that runs during startup
+    // (the session announce) passes one, because nothing may hold the process between spawn and "ready".
     res = await fetch(url, {
       method: opts.method ?? 'PATCH',
       headers: { Accept: 'application/json', 'content-type': 'application/json' },
       body: JSON.stringify(payload),
+      signal: opts.timeoutMs ? AbortSignal.timeout(opts.timeoutMs) : undefined,
     })
   } catch (e) {
     return { ok: false, text: `network error reaching ${BASE}: ${String(e)}` }
@@ -249,6 +263,29 @@ async function fetchRoster(
   return parsed.agents as AgentProfile[]
 }
 
+/**
+ * Announce this process's session to the collector (or refresh it) and read back who else is live under `agent`.
+ * The shim has no database, so this one endpoint does both jobs the local server does against the table directly:
+ * register the fork, and hand back the live set whoami turns into a collision warning. A failure is RETURNED, not
+ * swallowed — a collision we could not check for is worse left unsaid than said plainly.
+ */
+async function registerSession(agent: string, opts: { timeoutMs?: number } = {}): Promise<AgentSession[] | { err: string }> {
+  const answer = await send(
+    SESSION_ENDPOINT,
+    { session: SESSION.sessionId, agent, origin: SESSION.origin, startedAt: SESSION.startedAt },
+    { method: 'POST', timeoutMs: opts.timeoutMs },
+  )
+  if (!answer.ok) return { err: sessionEndpointUnavailable(BASE, answer.text) }
+  let parsed: { sessions?: unknown }
+  try {
+    parsed = JSON.parse(answer.body) as { sessions?: unknown }
+  } catch {
+    return { err: `could not read live sessions from ${BASE}${SESSION_ENDPOINT}: ${answer.body.slice(0, 300)}` }
+  }
+  if (!Array.isArray(parsed.sessions)) return { err: `unexpected answer from ${BASE}${SESSION_ENDPOINT}: ${answer.body.slice(0, 300)}` }
+  return parsed.sessions as AgentSession[]
+}
+
 const say = (text: string) => ({ content: [{ type: 'text' as const, text }] })
 
 /**
@@ -306,13 +343,27 @@ server.tool(
     if ('err' in who) return say(who.err)
     const ref = await projectRef()
     const roster = await fetchRoster()
+    // Announce (and refresh) this session, and read back who else is live under the same handle. A collector that
+    // predates the endpoint returns an error string, surfaced as a warning rather than silently omitting the check.
+    const live = await registerSession(who.identity)
+    const collisionWarning = 'err' in live ? null : sessionCollisionWarning(SESSION.sessionId, who.identity, live, Date.now())
     // A roster that could not be read is said out loud rather than shown as "not registered" — the two look the
     // same in the answer and mean opposite things.
-    const extraWarnings = [...('err' in ref ? [ref.err] : []), ...('err' in roster ? [roster.err] : [])]
+    const extraWarnings = [
+      ...('err' in ref ? [ref.err] : []),
+      ...('err' in roster ? [roster.err] : []),
+      ...('err' in live ? [live.err] : []),
+    ]
     const profile = Array.isArray(roster) ? roster.find((a) => a.handle === who.identity) ?? null : null
     return say(
       JSON.stringify(
-        describeSelf({ acting: who, board: 'err' in ref ? null : { id: ref.id, name: ref.name }, profile, extraWarnings }),
+        describeSelf({
+          acting: who,
+          board: 'err' in ref ? null : { id: ref.id, name: ref.name },
+          profile,
+          session: { ...SESSION, collisionWarning },
+          extraWarnings,
+        }),
         null,
         2,
       ),
@@ -465,7 +516,7 @@ server.tool(
   'ack_updates',
   ACK_UPDATES_DOC,
   { cursor: z.number().int().min(0), agent: z.string().optional().describe(ACK_AGENT_DOC) },
-  async ({ cursor, agent }) => say(said(await send('/api/updates', { cursor, agent: normalizeIdentity(agent) }, { method: 'POST' }))),
+  async ({ cursor, agent }) => say(said(await send('/api/updates', { cursor, agent: normalizeIdentity(agent), session: SESSION.sessionId }, { method: 'POST' }))),
 )
 
 server.tool(
@@ -485,7 +536,7 @@ server.tool(
       said(
         await send(
           `/api/reports/${encodeURIComponent(id)}/comments`,
-          { body, verifyUrl, verifySteps, agent: declaredIdentity(agent) },
+          { body, verifyUrl, verifySteps, agent: declaredIdentity(agent), session: SESSION.sessionId },
           { method: 'POST' },
         ),
       ),
@@ -521,6 +572,7 @@ server.tool(
           verifyUrl,
           verifySteps,
           evidence,
+          session: SESSION.sessionId,
         }),
       ),
     ),
@@ -547,6 +599,7 @@ server.tool(
           verifyUrl,
           verifySteps,
           evidence,
+          session: SESSION.sessionId,
         }),
       ),
     ),
@@ -564,7 +617,7 @@ server.tool(
   // server calls — so a typo and an unknown handle come back in identical words through either transport. A
   // pre-flight check here could only be a second opinion, and a staler one.
   async ({ id, assignee, agent }) =>
-    say(said(await send(`/api/reports/${encodeURIComponent(id)}`, { assignee, agent: declaredIdentity(agent) }))),
+    say(said(await send(`/api/reports/${encodeURIComponent(id)}`, { assignee, agent: declaredIdentity(agent), session: SESSION.sessionId }))),
 )
 
 server.tool(
@@ -612,6 +665,7 @@ server.tool(
         pageUrl: checked.links[0] ?? null,
         type: type ?? DEFAULT_TYPE,
         severity: severity ?? DEFAULT_SEVERITY,
+        session: SESSION.sessionId,
       },
       { method: 'POST', auth: 'ingestKey' },
     )
@@ -633,10 +687,26 @@ server.tool(
 
 const transport = new StdioServerTransport()
 await server.connect(transport)
+
+// Announce the session so a second fork is visible before its first write — but AFTER connect and WITHOUT awaiting
+// it: the announce is a network round trip, and a collector that is down, slow, or a black hole must never delay
+// "ready" (the same reason onboardingFacts caps its lookups). It is best-effort telemetry — whoami re-announces and
+// reads collisions on demand — so a failure is shouted on stderr and dropped, never made fatal. Bounded so the
+// process is not left holding a socket to a hung collector.
+if (BASE && KEY) {
+  void (async () => {
+    const bootWho = await actingIdentity(undefined)
+    if ('err' in bootWho) return console.error(`[mcp-remote] session not announced at startup: ${bootWho.err}`)
+    const live = await registerSession(bootWho.identity, { timeoutMs: BOOT_LOOKUP_MS })
+    if ('err' in live) console.error(`[mcp-remote] ${live.err}`)
+  })()
+}
+
 console.error(
   `tester-huester remote MCP ready (stdio) → ${BASE || '(no TH_COLLECTOR)'}` +
     `${ENV_IDENTITY ? ` as "${ENV_IDENTITY}"` : " as the board's own name (TH_AGENT is unset)"}` +
-    `${INGEST_KEY ? '' : ' — create_task disabled (no TH_INGEST_KEY)'}`,
+    `${INGEST_KEY ? '' : ' — create_task disabled (no TH_INGEST_KEY)'}` +
+    ` [session ${SESSION.sessionId.slice(0, 8)} @ ${SESSION.origin}]`,
 )
 // Loud, and after the ready line so it is the last thing in the log rather than the first thing scrolled past.
 if (!ENV_IDENTITY) console.error(thAgentUnsetWarning('[mcp-remote]'))

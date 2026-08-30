@@ -8,6 +8,7 @@ import {
   normalizeAgentTitle,
   normalizeIdentity,
   statusQueryTargets,
+  IDENTITY_EXTENSION,
   IDENTITY_OWNER,
   LEGACY_ACTOR_HUMAN,
   LEGACY_STATUS_FIXED,
@@ -19,7 +20,23 @@ import {
   STATUS_REJECTED,
   STATUS_TAKEN,
   STATUS_VERIFIED,
+  STATUS_WONTFIX,
 } from './verify'
+
+// A session is "live" if it acted within this window. 10 minutes: long enough to survive a slow agent loop
+// between two calls, short enough that a process which has actually exited stops counting as a collision soon
+// after. Exported because the screens that read collisions must use the SAME window the storage layer buckets by.
+export const SESSION_LIVE_MS = 10 * 60 * 1000
+// A rostered, active agent that has not acted in this long is flagged "silent" by the system-health lens — long
+// enough that an ordinary quiet spell does not trip it, short enough to catch a stuck or dead worker within a day.
+export const SILENT_AGENT_MS = 24 * 60 * 60 * 1000
+const DAY_MS = 24 * 60 * 60 * 1000
+
+// Journal actors that name nobody the roster can look up: the extension channel, an empty string, and the string
+// forms a missing identity serialises to across the two languages that touch this data. Compared lowercase. The
+// system-health lens counts entries under these as "unnamed-actor events" — the signal-quality problem this whole
+// board exists to make visible.
+const UNNAMED_ACTORS = [IDENTITY_EXTENSION, '', 'none', 'null', 'undefined']
 
 const STATUSES_FOR_ERROR = STATUSES.join(', ')
 
@@ -81,6 +98,21 @@ function db(): DatabaseSync {
       created_at integer NOT NULL
     );
     CREATE INDEX IF NOT EXISTS events_project_idx ON events (project_id, seq);
+    -- A running session of one agent process. Identity is a HANDLE (agent), but a handle FORKS: eRENTAL has many
+    -- git worktrees and dozens of claude processes all signing as "erental". A session is one such process; more
+    -- than one LIVE session under a single handle is a COLLISION the dashboard must be able to name. Addressing is
+    -- unchanged — work is still addressed to a handle, never to a session — this table only makes the forks visible.
+    -- origin is free provenance the process reports about itself (worktree path, pid, host); started_at is
+    -- stamped once and last_seen moves on every call, so liveness is a plain last_seen-within-window test.
+    CREATE TABLE IF NOT EXISTS agent_sessions (
+      session_id text PRIMARY KEY,
+      agent      text NOT NULL,
+      project_id text,
+      origin     text NOT NULL DEFAULT '',
+      started_at integer NOT NULL,
+      last_seen  integer NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS agent_sessions_agent_idx ON agent_sessions (agent, last_seen DESC);
     CREATE TABLE IF NOT EXISTS comments (
       id text PRIMARY KEY,
       report_id text NOT NULL,
@@ -168,6 +200,15 @@ function db(): DatabaseSync {
   if (!columnExists(c, 'reports', 'assignee')) c.exec('ALTER TABLE reports ADD COLUMN assignee text')
   if (!columnExists(c, 'reports', 'taken_by')) c.exec('ALTER TABLE reports ADD COLUMN taken_by text')
   if (!columnExists(c, 'reports', 'taken_at')) c.exec('ALTER TABLE reports ADD COLUMN taken_at integer')
+  // The CHANNEL a ticket arrived through, distinct from WHO filed it. A capture is the owner's action (creator =
+  // owner, so he can accept his own ticket) but it still came in through the extension — `via` keeps that
+  // provenance so nothing is lost when the fallback creator stops being 'extension'. Nullable: legacy rows and
+  // agent-filed tickets read back null.
+  if (!columnExists(c, 'reports', 'via')) c.exec('ALTER TABLE reports ADD COLUMN via text')
+  // Which SESSION wrote this journal entry. Nullable on purpose: the HTTP path and every caller written before
+  // sessions existed have none, and a missing session must read back cleanly as null — never as a guessed one. A
+  // present value is what lets the dashboard say WHICH of an agent's forked processes made a given change.
+  if (!columnExists(c, 'events', 'session')) c.exec('ALTER TABLE events ADD COLUMN session text')
   c.exec(`
     CREATE INDEX IF NOT EXISTS reports_assignee_idx ON reports (assignee, created_at);
     CREATE INDEX IF NOT EXISTS reports_creator_idx ON reports (creator, created_at);
@@ -303,6 +344,9 @@ export type Report = {
   // Addressing. `reporter` above stays the free human text; these three are canonical identities (lowercase),
   // null on every row filed before the lifecycle existed.
   creator: string | null; assignee: string | null; takenBy: string | null; takenAt: number | null
+  // The channel the ticket came in through (e.g. 'extension'), separate from `creator` (who filed it). Null on
+  // legacy rows and on tickets an agent filed directly.
+  via: string | null
 }
 
 // Accept only well-formed entries and cap the list. Used on both the write and the read path: a row written by
@@ -337,8 +381,10 @@ export type EventKind = 'created' | 'status' | 'edited' | 'comment' | 'archived'
 // kind of quiet wrongness this board exists to prevent, so callers validate against this list.
 export const UPDATE_FILTERS = ['inbox', 'review', 'rework'] as const
 export type UpdateFilter = (typeof UPDATE_FILTERS)[number]
-export type ChangeEvent = { seq: number; projectId: string; reportId: string; kind: EventKind; actor: string; detail: string | null; createdAt: number }
-const toEvent = (r: any): ChangeEvent => ({ seq: r.seq, projectId: r.project_id, reportId: r.report_id, kind: r.kind as EventKind, actor: r.actor, detail: r.detail ?? null, createdAt: r.created_at })
+// `session` is which running process wrote the entry (agent_sessions.session_id); null on the HTTP path and on
+// any entry written before sessions existed — a missing session reads back as null, never as a guessed one.
+export type ChangeEvent = { seq: number; projectId: string; reportId: string; kind: EventKind; actor: string; detail: string | null; session: string | null; createdAt: number }
+const toEvent = (r: any): ChangeEvent => ({ seq: r.seq, projectId: r.project_id, reportId: r.report_id, kind: r.kind as EventKind, actor: r.actor, detail: r.detail ?? null, session: r.session ?? null, createdAt: r.created_at })
 
 export type AuthorKind = 'agent' | 'human'
 // `verifyUrl` / `verifySteps` are the check the author is handing over: WHERE to look and HOW. Required of an
@@ -369,6 +415,7 @@ const toReport = (r: any): Report => ({
   type: (r.type ?? 'bug') as ReportType, severity: (r.severity ?? null) as Severity | null,
   archived: !!r.archived,
   creator: r.creator ?? null, assignee: r.assignee ?? null, takenBy: r.taken_by ?? null, takenAt: r.taken_at ?? null,
+  via: r.via ?? null,
 })
 
 function parseJson(s: unknown): unknown | null {
@@ -391,7 +438,63 @@ export type NewReport = {
   // Canonical identities (normalizeIdentity), supplied by whoever files the ticket. A capture that says nothing
   // about who filed it keeps them null — see the ingest route, which fills `creator` from the declared source.
   creator?: string | null; assignee?: string | null
+  // The channel this ticket arrived through (e.g. 'extension'). Provenance only — it never affects who may act on
+  // the ticket. Omitted for agent-filed tickets.
+  via?: string | null
 }
+
+// ── sessions: one running process of an agent handle ──────────────────────────────────────────────────────
+// A handle forks into many processes; a session is one of them. These types are what the dashboard reads to say
+// "erental is 6 live sessions right now" and to flag the collision that fact represents.
+export type AgentSession = {
+  sessionId: string; agent: string; projectId: string | null
+  origin: string; startedAt: number; lastSeen: number
+}
+// Live sessions collapsed to one row per handle. `count > 1` is a collision. `lastSeen` is the newest activity
+// across the group, so the dashboard can sort the loudest forks to the top.
+export type SessionGroup = { agent: string; count: number; lastSeen: number; sessions: AgentSession[] }
+
+const toSession = (r: any): AgentSession => ({
+  sessionId: r.session_id, agent: r.agent, projectId: r.project_id ?? null,
+  origin: r.origin ?? '', startedAt: r.started_at, lastSeen: r.last_seen,
+})
+
+// ── stats aggregates: the four lenses of the stats screen, computed in SQL ─────────────────────────────────
+// One row per handle for the "agent health" lens. Event-derived counts (filed…rejected) honour the optional
+// window; `holding` is a CURRENT-state count (open tickets on its plate) and `lastEventAt` is the true last
+// time it acted, unwindowed — both answer "is this agent overloaded / silent" regardless of the chosen window.
+export type AgentActivity = {
+  agent: string
+  filed: number            // journal 'created' events by this actor
+  taken: number            // status moves this actor made INTO 'taken'
+  handedToReview: number   // status moves this actor made INTO 'needs_review'
+  accepted: number         // status moves this actor made INTO 'verified' (only a filer/owner can)
+  rejected: number         // status moves this actor made INTO 'rejected'
+  holding: number          // reports where taken_by = this agent AND status in (taken, needs_review)
+  lastEventAt: number | null
+}
+// One row per UTC day for the "flow over time" lens.
+export type FlowDay = { day: string; created: number; verified: number }
+// One stuck ticket for the "bottlenecks" lens: not resolved and addressed to nobody.
+export type Orphan = { id: string; shortId: string; note: string; status: string; createdAt: number; ageMs: number }
+// The "system health" lens: the counts that say whether the board itself is healthy, plus the handles behind the
+// two counts a human will want to act on.
+export type SystemHealth = {
+  journalSize: number          // total events on the board
+  unnamedActorEvents: number   // events whose actor names nobody lookup-able (extension/empty/none-like)
+  liveSessions: number         // sessions seen within SESSION_LIVE_MS
+  collisions: number           // handles with more than one live session
+  collidingAgents: string[]    // …which handles those are
+  silentAgents: number         // active roster agents not seen within SILENT_AGENT_MS
+  silentAgentHandles: string[] // …which handles those are
+}
+
+// A 'status' event's detail names the destination status LAST — `${old} → ${new}` today, and older/legacy rows
+// wrote it as `old -> new` or even the bare new status. Matching the destination as a SUFFIX counts a move INTO a
+// status across all three spellings, and it is also the right semantics: a move is classified by where it lands,
+// not where it came from. Gated by kind='status' at every call site, so a comment ending in the same word cannot
+// be miscounted.
+const movedIntoLike = (status: string): string => `%${status}`
 
 export const repo = {
   getProjectByKey(key: string): Project | null {
@@ -444,9 +547,9 @@ export const repo = {
     const id = crypto.randomUUID()
     const attachments = normalizeAttachments(x.attachments)
     db().prepare(
-      `INSERT INTO reports (id, project_id, note, screenshot_url, page_url, viewport, user_agent, reporter, status, created_at, context, replay_url, video_url, video_seconds, video_trim, video_frames, attachments, type, severity, creator, assignee)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-    ).run(id, x.projectId, x.note, x.screenshotUrl ?? null, x.pageUrl ?? null, x.viewport ?? null, x.userAgent ?? null, x.reporter ?? null, STATUS_NEW, Date.now(), x.context != null ? JSON.stringify(x.context) : null, x.replayUrl ?? null, x.videoUrl ?? null, x.videoSeconds ?? null, x.videoTrim ? JSON.stringify(x.videoTrim) : null, x.videoFrames?.length ? JSON.stringify(x.videoFrames) : null, attachments.length ? JSON.stringify(attachments) : null, x.type ?? 'bug', x.severity ?? null, x.creator ?? null, x.assignee ?? null)
+      `INSERT INTO reports (id, project_id, note, screenshot_url, page_url, viewport, user_agent, reporter, status, created_at, context, replay_url, video_url, video_seconds, video_trim, video_frames, attachments, type, severity, creator, assignee, via)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+    ).run(id, x.projectId, x.note, x.screenshotUrl ?? null, x.pageUrl ?? null, x.viewport ?? null, x.userAgent ?? null, x.reporter ?? null, STATUS_NEW, Date.now(), x.context != null ? JSON.stringify(x.context) : null, x.replayUrl ?? null, x.videoUrl ?? null, x.videoSeconds ?? null, x.videoTrim ? JSON.stringify(x.videoTrim) : null, x.videoFrames?.length ? JSON.stringify(x.videoFrames) : null, attachments.length ? JSON.stringify(attachments) : null, x.type ?? 'bug', x.severity ?? null, x.creator ?? null, x.assignee ?? null, x.via ?? null)
     return this.getReport(id)!
   },
   // Backwards compatible: the old call site passed only `status`. New filters (projectId, type) are additive
@@ -535,9 +638,11 @@ export const repo = {
     return true
   },
   // ── change journal: what an agent polls instead of re-reading the board ───────────────────────────────
-  logEvent(x: { projectId: string; reportId: string; kind: EventKind; actor: string; detail?: string }): number {
-    const r = db().prepare('INSERT INTO events (project_id, report_id, kind, actor, detail, created_at) VALUES (?,?,?,?,?,?)')
-      .run(x.projectId, x.reportId, x.kind, x.actor, x.detail ?? null, Date.now())
+  // `session` is optional and never inferred: a caller that knows which process it is (the MCP servers, once they
+  // open a session) passes it; the HTTP path and older callers omit it and the entry reads back with session=null.
+  logEvent(x: { projectId: string; reportId: string; kind: EventKind; actor: string; detail?: string; session?: string | null }): number {
+    const r = db().prepare('INSERT INTO events (project_id, report_id, kind, actor, detail, session, created_at) VALUES (?,?,?,?,?,?,?)')
+      .run(x.projectId, x.reportId, x.kind, x.actor, x.detail ?? null, x.session ?? null, Date.now())
     return Number(r.lastInsertRowid)
   },
   // Everything that happened in a project after `since`, oldest first. `limit` bounds a catch-up burst.
@@ -751,6 +856,164 @@ export const repo = {
     if (!sets.length) return false
     args.push(id)
     return db().prepare(`UPDATE reports SET ${sets.join(', ')} WHERE id = ?`).run(...args).changes > 0
+  },
+
+  // ── sessions: which running processes an agent handle has forked into ──────────────────────────────────
+  /**
+   * Announce a session, or refresh one that already exists. `started_at` is written ONCE — a process that opens
+   * its session a second time (a reconnect) keeps its original start time, and only `last_seen` moves; `origin`
+   * is refreshed only when a non-empty one is supplied, so a later call cannot blank provenance the first set.
+   * `agent` must already be canonical (normalizeIdentity), as the stored handle everywhere else is — grouping
+   * live sessions per handle is a plain equality, and raw casing would split one agent into several.
+   */
+  openSession(x: { sessionId: string; agent: string; projectId?: string | null; origin?: string; startedAt: number }): void {
+    const agent = normalizeIdentity(x.agent)
+    if (!agent) throw new Error(`openSession: "${String(x.agent)}" is not a usable agent handle`)
+    if (!x.sessionId) throw new Error('openSession: sessionId is required — a session with no id cannot be tracked')
+    const now = Date.now()
+    db().prepare(
+      `INSERT INTO agent_sessions (session_id, agent, project_id, origin, started_at, last_seen)
+       VALUES (?,?,?,?,?,?)
+       ON CONFLICT(session_id) DO UPDATE SET
+         last_seen = excluded.last_seen,
+         project_id = COALESCE(excluded.project_id, agent_sessions.project_id),
+         origin = CASE WHEN excluded.origin != '' THEN excluded.origin ELSE agent_sessions.origin END`,
+    ).run(x.sessionId, agent, x.projectId ?? null, x.origin ?? '', x.startedAt, now)
+  },
+  /**
+   * Move a session's last_seen to now — the cheap heartbeat run on every call. Returns whether a row was found:
+   * a session that was never opened has nothing to move, and the caller (not a silent fallback here) decides
+   * whether to open one. No auto-create: touchSession does not know the agent/origin an open needs.
+   */
+  touchSession(sessionId: string): boolean {
+    if (!sessionId) return false
+    return db().prepare('UPDATE agent_sessions SET last_seen = ? WHERE session_id = ?').run(Date.now(), sessionId).changes > 0
+  },
+  /** The live sessions for one handle, newest activity first. `windowMs` defaults to SESSION_LIVE_MS. */
+  liveSessions(agent: string, windowMs: number = SESSION_LIVE_MS): AgentSession[] {
+    const h = normalizeIdentity(agent)
+    if (!h) return []
+    const cutoff = Date.now() - windowMs
+    const rows = db().prepare('SELECT * FROM agent_sessions WHERE agent = ? AND last_seen >= ? ORDER BY last_seen DESC').all(h, cutoff)
+    return rows.map(toSession)
+  },
+  /**
+   * Every live session, collapsed to one row per handle — the dashboard's collision view. A group with count > 1
+   * is an agent whose handle is being signed by more than one running process at once. `windowMs` defaults to
+   * SESSION_LIVE_MS; groups are ordered by newest activity, and sessions within a group likewise.
+   */
+  sessionsByAgent(windowMs: number = SESSION_LIVE_MS): SessionGroup[] {
+    const cutoff = Date.now() - windowMs
+    // The live set is bounded by the window (minutes), so it is small — grouping the already-ordered rows in JS
+    // keeps "newest first" exact without a second query. This is not the 1000-row scan the stats reads avoid.
+    const rows = db().prepare('SELECT * FROM agent_sessions WHERE last_seen >= ? ORDER BY last_seen DESC').all(cutoff).map(toSession)
+    const groups = new Map<string, SessionGroup>()
+    for (const s of rows) {
+      const g = groups.get(s.agent)
+      if (g) { g.sessions.push(s); g.count++; if (s.lastSeen > g.lastSeen) g.lastSeen = s.lastSeen }
+      else groups.set(s.agent, { agent: s.agent, count: 1, lastSeen: s.lastSeen, sessions: [s] })
+    }
+    return [...groups.values()].sort((a, b) => b.lastSeen - a.lastSeen)
+  },
+
+  // ── stats aggregates: pure reads for the stats screen, counted in SQL ──────────────────────────────────
+  /**
+   * The "agent health" lens: one row per handle that has either acted in the journal or is currently holding a
+   * ticket. The five action counts are windowed when `windowMs` is given (the last N ms); `holding` and
+   * `lastEventAt` are always current/all-time — you flag a silent agent by how long ago it last acted, not by a
+   * window that would hide the silence. Counting is GROUP BY in SQLite; only the merge of the few handles is JS.
+   */
+  agentActivity(windowMs?: number): AgentActivity[] {
+    const c = db()
+    // undefined means all-time; a number (including 0) is a real cutoff, so 0 does not silently become all-time.
+    const since = windowMs === undefined ? 0 : Date.now() - windowMs
+    const acc = new Map<string, AgentActivity>()
+    const row = (agent: string): AgentActivity => {
+      let r = acc.get(agent)
+      if (!r) { r = { agent, filed: 0, taken: 0, handedToReview: 0, accepted: 0, rejected: 0, holding: 0, lastEventAt: null }; acc.set(agent, r) }
+      return r
+    }
+    const counts = c.prepare(
+      `SELECT actor,
+         SUM(CASE WHEN kind = 'created' THEN 1 ELSE 0 END) AS filed,
+         SUM(CASE WHEN kind = 'status' AND detail LIKE ? THEN 1 ELSE 0 END) AS taken,
+         SUM(CASE WHEN kind = 'status' AND detail LIKE ? THEN 1 ELSE 0 END) AS handed,
+         SUM(CASE WHEN kind = 'status' AND detail LIKE ? THEN 1 ELSE 0 END) AS accepted,
+         SUM(CASE WHEN kind = 'status' AND detail LIKE ? THEN 1 ELSE 0 END) AS rejected
+       FROM events WHERE created_at >= ? GROUP BY actor`,
+    ).all(movedIntoLike(STATUS_TAKEN), movedIntoLike(STATUS_NEEDS_REVIEW), movedIntoLike(STATUS_VERIFIED), movedIntoLike(STATUS_REJECTED), since) as any[]
+    for (const r of counts) {
+      const a = row(r.actor)
+      a.filed = Number(r.filed); a.taken = Number(r.taken); a.handedToReview = Number(r.handed)
+      a.accepted = Number(r.accepted); a.rejected = Number(r.rejected)
+    }
+    // Last time each actor acted — the true maximum, never windowed, so silence is measurable.
+    const last = c.prepare('SELECT actor, MAX(created_at) AS last_at FROM events GROUP BY actor').all() as any[]
+    for (const r of last) row(r.actor).lastEventAt = r.last_at
+    // Open tickets on each agent's plate right now: held by it and not yet resolved or handed back.
+    const holding = c.prepare(
+      'SELECT taken_by AS agent, COUNT(*) AS n FROM reports WHERE taken_by IS NOT NULL AND status IN (?, ?) GROUP BY taken_by',
+    ).all(STATUS_TAKEN, STATUS_NEEDS_REVIEW) as any[]
+    for (const r of holding) row(r.agent).holding = Number(r.n)
+    return [...acc.values()].sort((a, b) => (b.lastEventAt ?? 0) - (a.lastEventAt ?? 0))
+  },
+  /**
+   * The "flow over time" lens: filed vs accepted per UTC day over the last `days` days. Buckets are UTC
+   * (date(created_at/1000,'unixepoch')) so the same event lands in the same bucket wherever it is read from.
+   * Only days that saw activity appear — the screen fills the gaps, which it must do anyway for a continuous axis.
+   */
+  flowByDay(days: number): FlowDay[] {
+    const since = Date.now() - Math.max(1, days) * DAY_MS
+    const rows = db().prepare(
+      `SELECT date(created_at / 1000, 'unixepoch') AS day,
+         SUM(CASE WHEN kind = 'created' THEN 1 ELSE 0 END) AS created,
+         SUM(CASE WHEN kind = 'status' AND detail LIKE ? THEN 1 ELSE 0 END) AS verified
+       FROM events WHERE created_at >= ? GROUP BY day ORDER BY day ASC`,
+    ).all(movedIntoLike(STATUS_VERIFIED), since) as any[]
+    return rows.map((r) => ({ day: r.day as string, created: Number(r.created), verified: Number(r.verified) }))
+  },
+  /**
+   * The "bottlenecks" lens: the stuck pile — tickets nobody is addressed to that are not yet resolved. `verified`
+   * and `wontfix` are excluded (both are settled outcomes, not stuck work) and archived rows are excluded (they
+   * are hidden everywhere else on the board — surfacing them only here would mislead). Oldest first: the top of
+   * this list is the ticket that has waited longest. `ageMs` is a derived scalar off created_at.
+   */
+  orphans(): Orphan[] {
+    const now = Date.now()
+    const rows = db().prepare(
+      `SELECT id, note, status, created_at FROM reports
+       WHERE assignee IS NULL AND archived = 0 AND status NOT IN (?, ?)
+       ORDER BY created_at ASC`,
+    ).all(STATUS_VERIFIED, STATUS_WONTFIX) as any[]
+    return rows.map((r) => ({ id: r.id, shortId: shortId(r.id), note: r.note, status: r.status, createdAt: r.created_at, ageMs: now - r.created_at }))
+  },
+  /**
+   * The "system health" lens: is the board itself healthy. Journal size and the count of events whose actor names
+   * nobody lookup-able (the extension channel, an empty string, a None-like literal) both measure signal quality;
+   * collisions come from the live-session view; silent agents are active roster rows that have gone quiet past
+   * SILENT_AGENT_MS. The handles behind the last two counts ride along so the screen can name them.
+   */
+  systemHealth(): SystemHealth {
+    const c = db()
+    const journalSize = (c.prepare('SELECT COUNT(*) AS n FROM events').get() as { n: number }).n
+    const unnamedPlaceholders = UNNAMED_ACTORS.map(() => '?').join(',')
+    const unnamedActorEvents = (c.prepare(
+      `SELECT COUNT(*) AS n FROM events WHERE actor IS NULL OR LOWER(actor) IN (${unnamedPlaceholders})`,
+    ).get(...UNNAMED_ACTORS) as { n: number }).n
+    const groups = this.sessionsByAgent()
+    const colliding = groups.filter((g) => g.count > 1)
+    const liveSessions = groups.reduce((n, g) => n + g.count, 0)
+    const silentCutoff = Date.now() - SILENT_AGENT_MS
+    const silent = this.listAgents({ activeOnly: true }).filter((a) => a.lastSeen < silentCutoff)
+    return {
+      journalSize,
+      unnamedActorEvents,
+      liveSessions,
+      collisions: colliding.length,
+      collidingAgents: colliding.map((g) => g.agent),
+      silentAgents: silent.length,
+      silentAgentHandles: silent.map((a) => a.handle),
+    }
   },
 }
 

@@ -63,6 +63,19 @@
   color: var(--muted3);
 }
 
+/* Адресат не ведёт эту доску — «ждёт тебя», а не «сломано»: цвет внимания, не тревоги. */
+.offboard {
+  margin-top: 6px;
+  border-radius: var(--r2);
+  padding: 8px 11px;
+  font-size: 12px;
+  line-height: 1.5;
+  border: 1px solid color-mix(in srgb, var(--attention) 40%, var(--border));
+  background: color-mix(in srgb, var(--attention) 7%, transparent);
+  color: var(--attention-ink);
+}
+.offboard b { color: var(--text); }
+
 /* ── обстоятельства: то, что нужно раз в жизни, но нужно точно ──────────────────────────────────────── */
 .facts { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 6px var(--s3); font-size: 12.5px; }
 .factk { color: var(--muted2); }

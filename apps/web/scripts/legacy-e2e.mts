@@ -76,7 +76,7 @@ try {
 
   // ── the extension, unchanged ────────────────────────────────────────────────────────────────────────────
   let extensionTicket = ''
-  await check('1 extension capture (no creator, no assignee, no agent) is accepted and filed as "extension"', async () => {
+  await check('1 extension capture (no creator, no assignee, no agent) is filed FOR the owner, channel kept as via', async () => {
     const { status, body } = await j(
       await post('/api/ingest', {
         ingestKey: project.ingestKey,
@@ -88,9 +88,14 @@ try {
     )
     assert.equal(status, 200, JSON.stringify(body))
     assert.equal(body.ok, true)
-    assert.equal(body.creator, 'extension')
+    // A capture with no declared filer is the owner's — he is the one holding the extension — so he is recorded as
+    // the creator and can later verify his own ticket (only the filer or the owner may). The extension channel is
+    // not lost: it lands in `via`. This replaces the old fallback that filed as "extension", an identity nobody
+    // could act as, which is why owner captures used to sit unclosable.
+    assert.equal(body.creator, 'owner', 'an anonymous capture is filed FOR the owner, not the extension')
     assert.equal(body.assignee, null)
     extensionTicket = body.id
+    assert.equal(repo.getReport(body.id)?.via, 'extension', 'the channel the capture arrived through is preserved')
     // The capture channel must not have been promoted to a working agent by the act of capturing.
     assert.equal(repo.getAgent('extension')?.active, false, 'extension must stay unaddressable')
   })
@@ -138,7 +143,9 @@ try {
     assert.equal(status, 200, JSON.stringify(body))
     assert.ok(body.count >= 1)
     assert.ok(Array.isArray(body.agents), 'the roster block rides along')
-    assert.ok(body.agents.some((a: { handle: string }) => a.handle === 'extension'))
+    // The capture's creator is now the OWNER (a real, addressable roster row), so the owner is the participant the
+    // block carries. The channel, 'extension', rides in the ticket's `via` field, not as a participating agent.
+    assert.ok(body.agents.some((a: { handle: string }) => a.handle === 'owner'))
     // The unsigned status change above stamped taken_by with the board's name — that is the attribution rule
     // working as designed. What must never happen is that name arriving as an AGENT: it is reported apart, which
     // is what lets the dashboard mark it "НЕ В СОСТАВЕ" instead of drawing it as a colleague.

@@ -7,9 +7,11 @@ import {
   STATUS_NEEDS_REVIEW,
   STATUS_REJECTED,
   STATUS_TAKEN,
+  SESSION_LIVE_MS,
   type AgentProfile,
   type AuthorKind,
   type Report,
+  type SessionGroup,
 } from '@th/db'
 import AgentEditor from '@/components/AgentEditor'
 import { UNKNOWN_HINT } from '@/components/agents'
@@ -41,6 +43,14 @@ const AGENT_VOICE: AuthorKind = 'agent'
 // Переменная, которой агент называет себя на своей стороне. Названа здесь, потому что подсказка «как чинить»
 // печатает именно её: разъедется с @th/db — увидим на /agents/connect, где та же строка собрана из кода.
 const ENV_AGENT = 'TH_AGENT'
+
+// Вторая ручка развода форков: если два процесса ДОЛЖНЫ жить под одним именем, они хотя бы называют, кто из
+// них кто. Печатается в подсказке к совпадению — та же строка, что читает MCP-сервер при старте.
+const ENV_SESSION_LABEL = 'TH_SESSION_LABEL'
+
+// Окно, в котором сессия считается живой, — словами, для подписи под счётчиком сессий. SESSION_LIVE_MS задаёт
+// доска (@th/db); переведём его в минуты здесь, чтобы цифра в тексте не разошлась с той, по которой считают.
+const SESSION_LIVE_MIN = Math.round(SESSION_LIVE_MS / 60_000)
 
 /**
  * Что на агенте висит.
@@ -181,6 +191,12 @@ export default async function Roster() {
   const groups = GROUP_ORDER.map((key) => ({ key, rows: agents.filter((a) => standingOf(a, now) === key) }))
   const countOf = (key: Standing): number => groups.find((g) => g.key === key)?.rows.length ?? 0
 
+  // Живые сессии, свёрнутые по имени: группа с count > 1 — это совпадение, один handle подписывают несколько
+  // процессов разом. Ровно то, что владелец на доске увидеть не мог: кто «erental» прямо сейчас — один агент
+  // или шесть форков одного worktree, спорящих за один инбокс.
+  const sessionsByHandle = new Map<string, SessionGroup>(repo.sessionsByAgent().map((g) => [g.agent, g] as const))
+  const collisions = [...sessionsByHandle.values()].filter((g) => g.count > 1).length
+
   return (
     <Shell active="agents">
       <main className="wrap">
@@ -223,6 +239,15 @@ export default async function Roster() {
             <span className={s.sumitem} title={UNKNOWN_HINT}>
               <span className={s.sumn}>{strangers.length}</span>
               имён вне состава
+            </span>
+          ) : null}
+          {collisions ? (
+            <span
+              className={cx(s.sumitem, s.sumitem_attention)}
+              title={`Имена, под которыми прямо сейчас работает больше одной сессии (активность в последние ${SESSION_LIVE_MIN} мин). Каждое такое имя — общий инбокс на несколько форков.`}
+            >
+              <span className={s.sumn}>{collisions}</span>
+              совпадений сессий
             </span>
           ) : null}
           <span className={s.sumsep} />
@@ -306,6 +331,44 @@ export default async function Roster() {
                             Эта работа стоит: либо агента надо запустить заново, либо тикеты передать другому.
                           </div>
                         ) : null}
+
+                        {(() => {
+                          const group = sessionsByHandle.get(a.handle)
+                          if (!group || group.count === 0) return null
+                          // Одна сессия — это норма, а не событие: показываем тихо и без цвета внимания, иначе
+                          // экран кричит там, где всё в порядке.
+                          if (group.count === 1) {
+                            const only = group.sessions[0]
+                            if (!only) return null
+                            return (
+                              <div className={s.ses}>
+                                <span className={s.sesk}>1 сессия</span>
+                                <span className={s.sesorigin}>{only.origin || `${only.sessionId.slice(0, 8)}…`}</span>
+                                <span className={s.sesseen}>видели {agoLong(only.lastSeen, now)}</span>
+                              </div>
+                            )
+                          }
+                          // Совпадение: под одним именем работает несколько процессов. Это состояние «нужно
+                          // тебя» — отсюда цвет внимания и конкретное «как развести».
+                          return (
+                            <div className={cx(s.flag, s.flag_attention)}>
+                              <b>{group.count} сессии под одним именем.</b> Столько процессов сейчас подписываются как{' '}
+                              <code>{a.handle}</code> — у них один инбокс и один курсор журнала, и кто из них закрыл
+                              тикет, с доски не видно.
+                              <ul className={s.seslist}>
+                                {group.sessions.map((se) => (
+                                  <li className={s.sesrow} key={se.sessionId}>
+                                    <span className={s.sesorigin}>{se.origin || `${se.sessionId.slice(0, 8)}…`}</span>
+                                    <span className={s.sesseen}>видели {agoLong(se.lastSeen, now)}</span>
+                                  </li>
+                                ))}
+                              </ul>
+                              Развести на стороне агента: разные <code>{ENV_AGENT}</code> у каждого форка, либо, если
+                              имя общее намеренно, разные <code>{ENV_SESSION_LABEL}</code> — тогда форки хотя бы
+                              подписаны, кто из них кто.
+                            </div>
+                          )
+                        })()}
 
                         <div className={s.boards}>
                           <span className={s.boardsk}>доски</span>

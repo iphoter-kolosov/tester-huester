@@ -25,6 +25,9 @@
 .sumitem { display: inline-flex; align-items: baseline; gap: 7px; font-size: var(--fs-sm); color: var(--muted); }
 .sumn { font-family: var(--font-mono); font-size: var(--fs-h2); font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; }
 .sumitem_zero .sumn { color: var(--muted3); font-weight: 400; }
+/* Совпадения сессий в сводке — тем же цветом внимания, что и на карточках, чтобы взгляд связал одно с другим. */
+.sumitem_attention { color: var(--attention-ink); font-weight: 600; }
+.sumitem_attention .sumn { color: var(--attention); }
 .sumdot { width: 8px; height: 8px; border-radius: 50%; align-self: center; flex: none; }
 .dot_live { background: var(--verified); }
 .dot_quiet { background: var(--taken); }
@@ -111,10 +114,24 @@
   max-width: var(--measure);
 }
 .flag_hard { border-color: color-mix(in srgb, var(--rejected) 45%, var(--border)); background: color-mix(in srgb, var(--rejected) 7%, transparent); color: var(--danger-ink); }
+/* Совпадение сессий — «нужно тебя», а не «сломано»: единственный цвет внимания на этом экране, тот же, что и
+   у очереди владельца. */
+.flag_attention { border-color: color-mix(in srgb, var(--attention) 40%, var(--border)); background: color-mix(in srgb, var(--attention) 7%, transparent); color: var(--attention-ink); }
 .flag b { color: var(--text); }
 .flag code { font-family: var(--font-mono); font-size: 11.5px; color: var(--text); background: var(--panel2); border: 1px solid var(--border); border-radius: var(--r1); padding: 1px 6px; }
 .flaglink { color: var(--accent); font-weight: 600; white-space: nowrap; }
 .flaglink:hover { text-decoration: underline; }
+
+/* ── сессии: сколько процессов сейчас под этим именем ───────────────────────────────────────────────── */
+/* Одна сессия — тихая строка: факт, не тревога. */
+.ses { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; font-size: var(--fs-xs); color: var(--muted2); }
+.sesk { font-size: var(--fs-label); font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted3); }
+.sesorigin { font-family: var(--font-mono); font-size: 11px; color: var(--muted); word-break: break-all; }
+.sesseen { color: var(--muted3); font-variant-numeric: tabular-nums; }
+/* Список форков внутри плашки совпадения. */
+.seslist { list-style: none; margin: var(--s2) 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.sesrow { display: flex; align-items: baseline; gap: 7px; flex-wrap: wrap; padding: 3px 8px; border-radius: var(--r1); background: color-mix(in srgb, var(--attention) 6%, transparent); }
+.sesrow .sesorigin { color: var(--attention-ink); }
 
 .boards { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .boardsk { font-size: var(--fs-label); font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--muted3); }

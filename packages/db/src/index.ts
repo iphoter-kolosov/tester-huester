@@ -1,5 +1,8 @@
-export { repo, ensureSchema, MAX_ATTACHMENTS, normalizeAttachments, UPDATE_FILTERS } from './db'
-export type { Project, Report, NewReport, ReportType, Severity, Attachment, UpdateFilter, AgentProfile } from './db'
+export { repo, ensureSchema, MAX_ATTACHMENTS, normalizeAttachments, UPDATE_FILTERS, SESSION_LIVE_MS, SILENT_AGENT_MS } from './db'
+export type {
+  Project, Report, NewReport, ReportType, Severity, Attachment, UpdateFilter, AgentProfile,
+  AgentSession, SessionGroup, AgentActivity, FlowDay, Orphan, SystemHealth,
+} from './db'
 export {
   checkAgentStatusClaim,
   checkAssignee,

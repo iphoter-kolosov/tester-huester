@@ -21,6 +21,8 @@ import ArchiveToggle from '@/components/tickets/ArchiveToggle'
 import TicketProperties from '@/components/tickets/TicketProperties'
 import VerdictBar from '@/components/tickets/VerdictBar'
 import VideoFrames from './VideoFrames'
+import TicketHistory from '@/components/TicketHistory'
+import { reportTimeline } from './timeline'
 import { rosterMap } from '@/components/agents'
 import { participantsOf } from '@/lib/roster'
 import { agoLong, exact } from '@/lib/time'
@@ -79,6 +81,16 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
   const lastSeenOf = new Map(participants.agents.map((a) => [a.handle, a.lastSeen] as const))
   const liveOf = (handle: string): number | null => lastSeenOf.get(handle) ?? null
   const waiting = r.status === STATUS_NEEDS_REVIEW
+
+  // История тикета: кто его двигал и из какой сессии — прямой ответ на «какой форк это сделал».
+  const timeline = reportTimeline(r.projectId, r.id)
+
+  // Тикет адресован агенту, который ЭТУ доску не ведёт: он может его не увидеть — на доске, которую он не
+  // опрашивает, работа стоит молча. Флажок ставим только когда у агента доски ЕСТЬ и этой среди них нет:
+  // пустой список — это агент, ещё нигде не отметившийся, а не «читает не ту доску», и кричать про него рано.
+  const assigneeProfile = r.assignee ? participants.agents.find((a) => a.handle === r.assignee) : undefined
+  const assigneeOffBoard =
+    !!assigneeProfile && assigneeProfile.boards.length > 0 && !assigneeProfile.boards.includes(r.projectId)
 
   return (
     <Shell active="tickets">
@@ -165,6 +177,11 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
             ) : null}
 
             <CommentThread reportId={r.id} comments={comments} roster={roster} />
+
+            <section className={s.section}>
+              <SectionHeader title="История" hint="кто двигал тикет и из какой сессии" />
+              <TicketHistory entries={timeline} roster={roster} />
+            </section>
           </div>
 
           <aside className={s.side}>
@@ -182,6 +199,13 @@ export default async function ReportDetail({ params }: { params: Promise<{ id: s
                   roster={addressable}
                   assigneeUnknown={!!r.assignee && participants.unknown.includes(r.assignee)}
                 />
+                {assigneeOffBoard ? (
+                  <div className={s.offboard}>
+                    <b>Он не ведёт эту доску.</b> {assigneeProfile!.handle} отмечался на других досках, а «
+                    {projectName}» среди них нет — тикет может остаться незамеченным, пока его не передадут агенту
+                    этой доски.
+                  </div>
+                ) : null}
               </div>
               {/* Кто поставил и кто держит — два оставшихся слота адресации. «Кому» здесь нет намеренно: на него
                   уже отвечает орган передачи выше, и второй ответ рядом с первым читается как противоречие. */}

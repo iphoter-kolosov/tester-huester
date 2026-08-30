@@ -91,6 +91,12 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     }
     const speaker = agentSpeaker(body, project.name, project.id)
     const actor: Actor = { kind: 'agent', identity: speaker.identity }
+    // WHICH running process of this handle is writing. The remote MCP puts its session id in every write body so
+    // the journal records write-origin over HTTP too — without this, only a local server writing directly to the
+    // DB could stamp it, and every remote fork (the whole live board) would read back session=null and the ticket
+    // history could never say which worktree moved it. Self-declared like `agent`, at the same trust level; absent
+    // for old clients and the extension, in which case it stays null (never a guessed one).
+    const writeSession = typeof body.session === 'string' && body.session.trim() ? body.session.trim() : null
     // Registered BEFORE the request is judged, and before the assignee is checked against the roster. An agent
     // that declared a name has acted, whatever the verdict on the write turns out to be — and doing it first is
     // what lets an agent hand a ticket to itself on its very first call.
@@ -136,6 +142,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         kind: 'assigned',
         actor: actor.identity,
         detail: assignee ? `assignee: ${report.assignee ?? '—'} → ${assignee}` : `assignee cleared (was ${report.assignee ?? '—'})`,
+        session: writeSession,
       })
     }
 
@@ -143,7 +150,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     if (decision && decision.ok) {
       if (!repo.setStatus(report.id, decision.status)) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
       if (decision.takenBy) repo.setTaken(report.id, decision.takenBy)
-      repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'status', actor: actor.identity, detail: `${report.status} → ${decision.status}` })
+      repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'status', actor: actor.identity, detail: `${report.status} → ${decision.status}`, session: writeSession })
       // The comment carries the work report, so the thread reads as a record: what changed, where to look, how to
       // check it, and what proves it.
       if (decision.claim) {
@@ -156,7 +163,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
           verifySteps: decision.claim.verifySteps,
           evidence: decision.claim.evidence,
         })
-        repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'comment', actor: actor.identity, detail: decision.claim.body.slice(0, 200) })
+        repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'comment', actor: actor.identity, detail: decision.claim.body.slice(0, 200), session: writeSession })
       }
     }
     return NextResponse.json({

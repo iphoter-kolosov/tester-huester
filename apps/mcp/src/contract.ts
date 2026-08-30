@@ -1,3 +1,5 @@
+import os from 'node:os'
+import { randomUUID } from 'node:crypto'
 import { z } from 'zod'
 import {
   LEGACY_STATUS_FIXED,
@@ -10,6 +12,7 @@ import {
   normalizeVerifyUrl,
   resolveSpeaker,
   type AgentProfile,
+  type AgentSession,
   type Report,
   type ReportType,
   type Severity,
@@ -107,6 +110,89 @@ export const AGENT_ACTIVE_DOC =
   'false retires you: the entry stays readable so old threads still make sense, but nobody is offered you as an ' +
   'assignee any more. Send true to come back.'
 
+// ── the session fingerprint: which running PROCESS is signing under a handle ──────────────────────────────────
+//
+// Identity answers "whose work is this" — the handle a ticket is addressed to. It cannot answer "which of the six
+// processes signing as `erental` right now". A session does: minted once per process, it is what turns a shared,
+// nameless voice into a set of distinguishable ones, and — the whole point — what lets whoami SHOUT when a second
+// process is signing under the same handle, sharing its inbox and its journal cursor.
+
+/** The env var an operator sets to give a session a readable origin, e.g. "erental-checkout worktree". */
+export const SESSION_LABEL_ENV = 'TH_SESSION_LABEL'
+
+/** This process's session, minted once and kept for its life. `origin` is never empty — a nameless session is the
+ *  exact thing being fixed, so when no label is set it falls back to host#pid rather than to nothing. */
+export type SessionFingerprint = { sessionId: string; origin: string; startedAt: number }
+
+/**
+ * A session's origin line. TH_SESSION_LABEL wins when set; otherwise `host#pid`, which is always non-empty and
+ * still tells one worktree from another on the same machine. Pure of the environment so it can be unit-tested; the
+ * env read lives in mintSession.
+ */
+export function deriveSessionOrigin(label: string | undefined, hostname: string, pid: number): string {
+  const trimmed = (label ?? '').trim()
+  return trimmed || `${hostname}#${pid}`
+}
+
+/**
+ * Mint the fingerprint for THIS process — the same call on both servers, so a session opened over stdio and one
+ * announced to the collector are shaped identically. Reads TH_SESSION_LABEL / hostname / pid here, at the one spot
+ * a process becomes a session.
+ */
+export function mintSession(): SessionFingerprint {
+  return {
+    sessionId: randomUUID(),
+    origin: deriveSessionOrigin(process.env[SESSION_LABEL_ENV], os.hostname(), process.pid),
+    startedAt: Date.now(),
+  }
+}
+
+/** Enough of a UUID to name a session in a warning without printing the whole thing; the full id is in the answer. */
+export function shortSession(sessionId: string): string {
+  return sessionId.slice(0, 8)
+}
+
+/** Rough "how long ago", for a warning a human and an agent both read — seconds, then minutes, then hours. */
+function describeAgo(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000))
+  if (s < 60) return `${s}s`
+  const m = Math.round(s / 60)
+  if (m < 60) return `${m}m`
+  return `${Math.round(m / 60)}h`
+}
+
+/** The fix printed under every collision, worded once so both servers say it identically. */
+const SESSION_COLLISION_FIX = [
+  'FIX: give THIS session its own identity so its inbox and cursor stop being shared — set TH_AGENT to a distinct',
+  'handle (e.g. "erental-checkout"), or set TH_SESSION_LABEL per worktree AND a distinct TH_AGENT. Same TH_AGENT',
+  'across processes means one inbox and one journal cursor: a ticket addressed to this handle can be taken by any',
+  'of them, and get_updates acked by one hides those events from the rest.',
+].join(' ')
+
+/**
+ * The warning that makes a collision impossible to miss: given this process's own session id and the live sessions
+ * the board currently sees under `agent`, name the OTHER live ones (their origin and how long since each was seen)
+ * and say what a shared handle costs. Returns null when this session is the only one — no false alarm, no noise.
+ */
+export function sessionCollisionWarning(
+  selfSessionId: string,
+  agent: string,
+  live: AgentSession[],
+  now: number,
+): string | null {
+  const others = live.filter((s) => s.sessionId !== selfSessionId)
+  if (!others.length) return null
+  const rows = others.map(
+    (s) => `  • ${s.origin || '(no origin)'} — session ${shortSession(s.sessionId)}, last seen ${describeAgo(now - s.lastSeen)} ago`,
+  )
+  return [
+    `COLLISION: ${others.length + 1} live sessions are signing as "${agent}" right now — this one and ${others.length} other${others.length > 1 ? 's' : ''}:`,
+    ...rows,
+    'You share ONE inbox and ONE journal cursor with them, so work addressed to this handle is a race and acked updates go missing.',
+    SESSION_COLLISION_FIX,
+  ].join('\n')
+}
+
 // ── who this server is, and where that came from ────────────────────────────────────────────────────────────
 
 /**
@@ -179,9 +265,19 @@ export type WhoAmI = {
   registered: boolean
   roster: { title: string; role: string; active: boolean; lastSeen: number; boards: string[] } | null
   board: { id: string; name: string } | null
+  /** THIS process's session — its fingerprint, so two forks of one handle are told apart in the answer itself. */
+  session: { sessionId: string; shortId: string; origin: string; startedAt: number } | null
   warnings: string[]
   next: string[]
 }
+
+/**
+ * The session half of the whoami input: this process's fingerprint plus the collision warning already computed from
+ * the board's live sessions (null when there is no collision). Kept as a computed field rather than raw session
+ * rows because the two servers reach those rows differently — the local one from repo.liveSessions, the remote one
+ * from the collector — but must word the warning identically.
+ */
+export type SessionSelf = SessionFingerprint & { collisionWarning: string | null }
 
 /**
  * The answer to "who am I". An agent that cannot say this cannot introduce itself honestly, which is why the
@@ -192,10 +288,14 @@ export function describeSelf(x: {
   acting: ActingIdentity
   board: { id: string; name: string } | null
   profile: AgentProfile | null
+  session?: SessionSelf | null
   extraWarnings?: string[]
 }): WhoAmI {
   const { acting, profile } = x
   const warnings = [...(x.extraWarnings ?? [])]
+  // The collision is the loudest thing whoami can say, so it goes to the FRONT of the warnings — an agent scanning
+  // the list meets "you are one of several" before it meets anything about roles.
+  if (x.session?.collisionWarning) warnings.unshift(x.session.collisionWarning)
   const next: string[] = []
   if (acting.source === 'fallback') {
     warnings.push(FALLBACK_WARNING)
@@ -221,6 +321,9 @@ export function describeSelf(x: {
       ? { title: profile.title, role: profile.role, active: profile.active, lastSeen: profile.lastSeen, boards: profile.boards }
       : null,
     board: x.board,
+    session: x.session
+      ? { sessionId: x.session.sessionId, shortId: shortSession(x.session.sessionId), origin: x.session.origin, startedAt: x.session.startedAt }
+      : null,
     warnings,
     next,
   }
@@ -354,6 +457,24 @@ export const CREATE_TASK_DOC = [
   'role}), because the executor reports its finished work back to you. Without one the call is refused,',
   '`role_required` — filing for YOURSELF is not a handover and needs nothing.',
 ].join('\n')
+
+/**
+ * The collector endpoint the remote shim announces its session to and reads live sessions back from. The shim has
+ * no database of its own, so both the write-origin (a `session` field on each write) and the collision check go
+ * through the same board that owns the sessions table. POST body: `{ session, agent, origin, startedAt }` under the
+ * project read key; answer: `{ ok, sessions: AgentSession[] }` — the live sessions for that handle.
+ */
+export const SESSION_ENDPOINT = '/api/sessions'
+
+/** Shown by the remote whoami when the collector predates session tracking — a visible degradation, not a silent
+ *  one: the agent is told collisions cannot be checked and why, rather than being left to assume it is alone. */
+export function sessionEndpointUnavailable(base: string, detail: string): string {
+  return (
+    `Session tracking is unavailable on ${base} (${SESSION_ENDPOINT}): ${detail}. ` +
+    'This process still has its own session id, but collisions with other forks cannot be detected until this ' +
+    'collector exposes the sessions endpoint. Until then, keep TH_AGENT distinct per worktree by hand.'
+  )
+}
 
 /** The remote shim cannot create with the read key alone — see remote.ts. Appended there, not here, because it
  *  is a genuine difference in what the agent must have configured, not a difference in the tool's meaning. */

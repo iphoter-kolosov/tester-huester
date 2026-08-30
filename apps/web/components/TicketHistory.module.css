@@ -1,0 +1,48 @@
+/* Лента истории тикета: кто двигал и из какой сессии. Цвета — только токенами из globals.css. */
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s2);
+  flex-wrap: wrap;
+  padding: 7px 0;
+  border-top: 1px solid var(--border);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+.row:first-child { border-top: 0; }
+
+.who { font-weight: 600; color: var(--text); }
+.what { color: var(--muted); }
+
+/* Происхождение сессии — прямой ответ «какой форк». Стоит в моно, как всё, что различает процессы. */
+.session {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--accent-ink);
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, var(--border));
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+  border-radius: var(--r1);
+  padding: 1px 6px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Строку происхождения найти не удалось — показываем короткий id, и он приглушён: это различитель, не имя. */
+.session_raw { color: var(--muted2); border-color: var(--border); background: var(--panel2); }
+
+.when { margin-left: auto; color: var(--muted3); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.empty {
+  color: var(--muted2);
+  font-size: 12.5px;
+  padding: var(--s2) 0;
+}

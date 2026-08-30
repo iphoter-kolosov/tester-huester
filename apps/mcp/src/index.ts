@@ -44,6 +44,8 @@ import {
   REGISTER_NEEDS_FIELDS,
   REGISTER_NEEDS_IDENTITY,
   SET_STATUS_DOC,
+  mintSession,
+  sessionCollisionWarning,
   SEVERITY,
   SINCE_DOC,
   STATUS,
@@ -139,7 +141,34 @@ function actingIdentity(agent: string | undefined): string {
 function signWrite(agent: string | undefined): ActingIdentity {
   const who = acting(agent)
   if (who.rosterHandle) repo.touchAgent(who.rosterHandle, scopeId)
+  heartbeat()
   return who
+}
+
+// ── this process's session ────────────────────────────────────────────────────────────────────────────────
+// One fingerprint per process, kept for its whole life, so the journal can record WHICH process wrote each entry
+// and whoami can see when another process is signing under the same handle. Minted with the same helper the remote
+// shim uses — a session feature that behaved differently on the two servers would be its own trap.
+const SESSION = mintSession()
+
+/** The identity this PROCESS runs under, and the handle its session is grouped by. Per-call `agent` can still
+ *  override one write, but a session belongs to a process, and the collision worth shouting about is many
+ *  processes sharing one handle — so the session is opened under the process default. */
+const SESSION_AGENT = ENV_IDENTITY ?? boardIdentity()
+
+// Announce the session immediately, not on first write: a second fork must be visible the moment it starts, or the
+// first agent to call whoami would be told it is alone when it is not.
+repo.openSession({ sessionId: SESSION.sessionId, agent: SESSION_AGENT, projectId: scopeId, origin: SESSION.origin, startedAt: SESSION.startedAt })
+
+/**
+ * Keep the session warm. `last_seen` is what makes a session "live"; every action moves it, so a working process
+ * stays present and a crashed one ages out of the window on its own. If the row is gone (a wiped or swapped DB file
+ * mid-run) it is re-opened rather than the heartbeat failing in silence — the session must not simply vanish.
+ */
+function heartbeat(): void {
+  if (!repo.touchSession(SESSION.sessionId)) {
+    repo.openSession({ sessionId: SESSION.sessionId, agent: SESSION_AGENT, projectId: scopeId, origin: SESSION.origin, startedAt: SESSION.startedAt })
+  }
 }
 
 // Tools that need ONE project (they read the per-project cursor, or have to file into a single board) rather than
@@ -184,7 +213,7 @@ function applyStatus(
   if (!repo.setStatus(report.id, decision.status)) return `no report ${id}`
   // A work report from nobody leaves the filer with no one to send the rework back to.
   if (decision.takenBy) repo.setTaken(report.id, decision.takenBy)
-  repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'status', actor: identity, detail: `${report.status} → ${decision.status}` })
+  repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'status', actor: identity, detail: `${report.status} → ${decision.status}`, session: SESSION.sessionId })
   if (decision.claim) {
     repo.addComment({
       reportId: report.id,
@@ -195,7 +224,7 @@ function applyStatus(
       verifySteps: decision.claim.verifySteps,
       evidence: decision.claim.evidence,
     })
-    repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'comment', actor: identity, detail: decision.claim.body.slice(0, 200) })
+    repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'comment', actor: identity, detail: decision.claim.body.slice(0, 200), session: SESSION.sessionId })
   }
   return `report ${report.shortId} → ${decision.status} as "${identity}"${decision.claim?.verifyUrl ? ` (check: ${decision.claim.verifyUrl})` : ''}`
 }
@@ -254,16 +283,24 @@ server.tool(
   WHOAMI_DOC,
   { agent: z.string().optional().describe(`${AGENT_DOC} Pass it here to ask what WOULD be used for a call made under that name.`) },
   async ({ agent }) => {
+    // Calling whoami is itself a sign of life — keep the session warm so a process that only ever polls still
+    // shows as live to the next fork that checks for collisions.
+    heartbeat()
     const who = acting(agent)
     // The key being rejected is the difference between "this board" and "no board at all", and it would otherwise
     // show up only as an empty answer from every other tool.
     const extraWarnings = keyRejected ? [needsProject('whoami')!] : []
+    // Who else is signing under this identity right now. The list includes THIS session; sessionCollisionWarning
+    // filters it out by id, so the warning fires only when there is genuinely another process.
+    const live = repo.liveSessions(who.identity)
+    const collisionWarning = sessionCollisionWarning(SESSION.sessionId, who.identity, live, Date.now())
     return say(
       JSON.stringify(
         describeSelf({
           acting: who,
           board: scoped ? { id: scoped.id, name: scoped.name } : null,
           profile: repo.getAgent(who.identity),
+          session: { ...SESSION, collisionWarning },
           extraWarnings,
         }),
         null,
@@ -433,7 +470,7 @@ server.tool(
     if (verifyUrl && !url) return say('verifyUrl must be an absolute http(s) link')
     const author = signWrite(agent).identity
     const c = repo.addComment({ reportId: r.id, author, authorKind: 'agent', body, verifyUrl: url, verifySteps: normalizeSteps(verifySteps) })
-    repo.logEvent({ projectId: r.projectId, reportId: r.id, kind: 'comment', actor: author, detail: body.slice(0, 200) })
+    repo.logEvent({ projectId: r.projectId, reportId: r.id, kind: 'comment', actor: author, detail: body.slice(0, 200), session: SESSION.sessionId })
     return say(`comment added to ${id} as "${author}" (${c.id})`)
   },
 )
@@ -509,6 +546,7 @@ server.tool(
       kind: 'assigned',
       actor,
       detail: to ? `assignee: ${r.assignee ?? '—'} → ${to}` : `assignee cleared (was ${r.assignee ?? '—'})`,
+      session: SESSION.sessionId,
     })
     return say(to ? `report ${r.shortId} is now for "${to}" (by "${actor}")` : `report ${r.shortId} is unassigned (by "${actor}")`)
   },
@@ -555,7 +593,7 @@ server.tool(
       type: type ?? DEFAULT_TYPE,
       severity: severity ?? DEFAULT_SEVERITY,
     })
-    repo.logEvent({ projectId: scopeId, reportId: row.id, kind: 'created', actor: creator, detail: note.slice(0, 120) })
+    repo.logEvent({ projectId: scopeId, reportId: row.id, kind: 'created', actor: creator, detail: note.slice(0, 120), session: SESSION.sessionId })
     return say(taskFiled(row.id, creator, to))
   },
 )
@@ -582,7 +620,8 @@ const transport = new StdioServerTransport()
 await server.connect(transport)
 console.error(
   `tester-huester MCP server ready (stdio)${scoped ? ` — scoped to "${scoped.name}"` : ''}` +
-    `${ENV_IDENTITY ? ` as "${ENV_IDENTITY}"` : ` as "${boardIdentity()}" (the board's own name — TH_AGENT is unset)`}`,
+    `${ENV_IDENTITY ? ` as "${ENV_IDENTITY}"` : ` as "${boardIdentity()}" (the board's own name — TH_AGENT is unset)`}` +
+    ` [session ${SESSION.sessionId.slice(0, 8)} @ ${SESSION.origin}]`,
 )
 // Loud, and after the ready line so it is the last thing in the log rather than the first thing scrolled past.
 if (!ENV_IDENTITY) console.error(thAgentUnsetWarning('[mcp]'))

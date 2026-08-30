@@ -29,6 +29,7 @@ const reportsRoute = await import('../../web/app/api/reports/route.ts')
 const reportRoute = await import('../../web/app/api/reports/[id]/route.ts')
 const commentsRoute = await import('../../web/app/api/reports/[id]/comments/route.ts')
 const ingestRoute = await import('../../web/app/api/ingest/route.ts')
+const sessionsRoute = await import('../../web/app/api/sessions/route.ts')
 
 type Handler = (req: Request, ctx: { params: Promise<{ id: string }> }) => Promise<Response>
 const NO_ID = { params: Promise.resolve({ id: '' }) }
@@ -39,6 +40,7 @@ function route(method: string, pathname: string): { handler: Handler; ctx: { par
   if (pathname === '/api/agents') return pick(agentsRoute) ? { handler: pick(agentsRoute)!, ctx: NO_ID } : null
   if (pathname === '/api/reports') return pick(reportsRoute) ? { handler: pick(reportsRoute)!, ctx: NO_ID } : null
   if (pathname === '/api/ingest') return pick(ingestRoute) ? { handler: pick(ingestRoute)!, ctx: NO_ID } : null
+  if (pathname === '/api/sessions') return pick(sessionsRoute) ? { handler: pick(sessionsRoute)!, ctx: NO_ID } : null
   const comments = /^\/api\/reports\/([^/]+)\/comments$/.exec(pathname)
   if (comments) return pick(commentsRoute) ? { handler: pick(commentsRoute)!, ctx: withId(decodeURIComponent(comments[1]!)) } : null
   const one = /^\/api\/reports\/([^/]+)$/.exec(pathname)
@@ -164,6 +166,17 @@ assert.equal(repo.listComments(id!).at(-1)!.author, 'probe-board', 'an unsigned 
 assert.equal(repo.getAgent('probe-board'), null, 'and it registered nobody')
 console.log('8 add_comment signs the thread with the identity; unsigned stays the board and registers nobody ✓')
 
+// 8b — write-origin over HTTP: the comment `named` just posted must record WHICH session wrote it. This is the
+// remote half of the feature: the shim puts its session id in the write body, and the collector must read it into
+// the journal — without that, every remote write (the whole live board) reads back session=null and the ticket
+// history can never say which fork spoke.
+const namedWho = JSON.parse(await call(named, 'whoami')) as { session: { sessionId: string } | null }
+const namedComments = repo.eventsSince(project.id, 0, 500).filter((e) => e.reportId === id && e.kind === 'comment' && e.actor === ME)
+assert.ok(namedComments.length, 'the signed comment reached the journal')
+assert.ok(namedWho.session?.sessionId, 'the writer has a session id')
+assert.equal(namedComments.at(-1)!.session, namedWho.session!.sessionId, 'the journal event is stamped with the SESSION that wrote it — write-origin over HTTP')
+console.log('8b write-origin over HTTP: the remote comment is stamped with the writing session, not null ✓')
+
 // 9 — handing work to a stranger, refused in the same words the local server uses
 const handover = await call(named, 'assign_task', { id, assignee: 'nobody-here' })
 assert.match(handover, /^unknown_assignee/)
@@ -210,7 +223,23 @@ const filedAfter = await call(newcomer, 'create_task', { assignee: MATE, title: 
 assert.match(filedAfter, /task filed by "probe-newcomer"/, `a declared role opens the handover: ${filedAfter}`)
 console.log('10 the role gate refuses create_task/assign_task, leaves the work alone, and opens once a role is declared ✓')
 
+// 11 — remote collision detection, the deployed-board equivalent of session-e2e. The shim has no database, so
+// this is the path that only works because /api/sessions exists on the collector: a SECOND process signing as an
+// existing handle must have its whoami shout a collision naming the first, and a lone handle must stay silent.
+const namedTwin = await connect({ TH_COLLECTOR: BASE, TH_PROJECT_KEY: project.readKey, TH_INGEST_KEY: project.ingestKey, TH_AGENT: ME, TH_SESSION_LABEL: 'second-worktree' })
+const twinWho = JSON.parse(await call(namedTwin, 'whoami')) as { warnings: string[]; session: { origin: string } | null }
+const twinCollision = twinWho.warnings.find((w) => w.startsWith('COLLISION'))
+assert.ok(twinCollision, `the second remote fork must be warned about the first — warnings: ${JSON.stringify(twinWho.warnings)}`)
+assert.match(twinCollision!, /signing as "probe-agent"/, 'the collision names the shared handle')
+assert.match(twinCollision!, /2 live sessions/, 'it counts both live remote sessions')
+assert.equal(twinWho.session?.origin, 'second-worktree', 'the fork reports its own origin from TH_SESSION_LABEL')
+// A lone handle (the newcomer, the only process signing as it) must NOT be warned — no false alarm across handles.
+const newcomerWho = JSON.parse(await call(newcomer, 'whoami')) as { warnings: string[] }
+assert.ok(!newcomerWho.warnings.some((w) => w.startsWith('COLLISION')), 'a lone remote handle is not warned')
+console.log('11 remote collision detection (via /api/sessions): a second fork of one handle is caught and named; a lone handle is not ✓')
+
 console.log('=== every remote check passed ===')
+await namedTwin.close()
 await newcomer.close()
 await named.close()
 await anon.close()
