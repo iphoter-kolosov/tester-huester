@@ -2,13 +2,14 @@
 // экран, который добавит себе ссылку мимо этого файла, окажется местом, откуда не видно, где ты находишься.
 
 export const ROUTE_MINE = '/'
+export const ROUTE_MANAGER = '/manager'
 export const ROUTE_TICKETS = '/tickets'
 export const ROUTE_AGENTS = '/agents'
 export const ROUTE_STATS = '/stats'
 export const ROUTE_SETUP = '/setup'
 export const ROUTE_CONNECT = '/agents/connect'
 
-export type NavKey = 'mine' | 'tickets' | 'agents' | 'stats' | 'setup'
+export type NavKey = 'mine' | 'manager' | 'tickets' | 'agents' | 'stats' | 'setup'
 
 export type NavItem = {
   key: NavKey
@@ -21,6 +22,10 @@ export type NavItem = {
 
 export const NAV: readonly NavItem[] = [
   { key: 'mine', href: ROUTE_MINE, label: 'Мой ход', hint: 'Что ждёт вашего слова прямо сейчас', countTone: 'attention' },
+  // Без цифры на рельсе намеренно: план раскладки считается по всей доске и стоит дорого, а менеджер —
+  // экран, который открывают за раскладкой, а не по горящему счётчику. Единственная цифра, которой стоит
+  // гореть рядом, — очередь приёмки на «Моём ходе».
+  { key: 'manager', href: ROUTE_MANAGER, label: 'Менеджер', hint: 'Кому что раздать — менеджер предлагает, решаете вы', countTone: 'none' },
   { key: 'tickets', href: ROUTE_TICKETS, label: 'Тикеты', hint: 'Вся доска: фильтры, архив, поиск по работе', countTone: 'neutral' },
   { key: 'agents', href: ROUTE_AGENTS, label: 'Агенты', hint: 'Кто работает доску и кто на связи', countTone: 'neutral' },
   // Диагностический экран без цифры на рельсе: аналитику открывают за ответом, а не по счётчику, и лишнее число

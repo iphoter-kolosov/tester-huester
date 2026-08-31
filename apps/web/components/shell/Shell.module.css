@@ -31,6 +31,8 @@
   color: var(--text);
 }
 .brandmark { border-radius: 7px; display: block; }
+/* Доска подписана как рукопись: первая литера имени — полированным золотом (--gold-ink, 4.7 : 1). */
+.brand::first-letter { color: var(--gold-ink); }
 
 .group { display: flex; flex-direction: column; gap: 2px; }
 .groupttl {

@@ -514,6 +514,20 @@ export const repo = {
     const rows = db().prepare('SELECT * FROM projects ORDER BY created_at ASC').all()
     return rows.map(toProject)
   },
+  // Board-level configuration, one string per key in the `meta` table. Introduced for the dispatch autonomy
+  // switch: a setting the owner flips at runtime must survive a restart and be readable by a server component,
+  // which an env var only satisfies with a redeploy. A missing key reads back null — never a guessed default;
+  // the caller decides what absence means, and for autonomy absence deliberately means OFF (see resolveAutonomy).
+  getMeta(key: string): string | null {
+    const r = db().prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined
+    return r ? r.value : null
+  },
+  // Upsert, because a setting is written many times. The `meta` PRIMARY KEY on `key` makes ON CONFLICT the whole
+  // update — one row per key, last write wins, no history (a setting has no past to keep, unlike the journal).
+  setMeta(key: string, value: string): void {
+    db().prepare('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+      .run(key, value)
+  },
   ensureProject(name: string, ingestKey: string): Project {
     const ex = this.getProjectByKey(ingestKey)
     if (ex) return ex

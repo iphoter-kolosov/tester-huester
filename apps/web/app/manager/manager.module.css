@@ -1,0 +1,195 @@
+/* Экран «Менеджер». Цвета — только токенами из globals.css; ни одного литерала.
+   Цветом внимания (--attention) на этом экране красится ТОЛЬКО раздел «тебе решать»: это единственное, что
+   доходит до владельца. Предложения раздать и подтолкнуть — спокойные бумага, чернила и линии, иначе то,
+   что требует его слова, перестанет быть видно среди того, что менеджер уже разложил. */
+
+/* ── режим советника: спокойная плашка, но её нельзя не заметить ─────────────────────────────────────── */
+.mode {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--s3);
+  margin: var(--s5) 0 var(--s5);
+  padding: var(--s3) var(--s4);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r3);
+  background: var(--panel);
+  box-shadow: var(--shadow-1);
+  max-width: var(--measure);
+}
+.modedot {
+  flex: none;
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 4px color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.modetxt { color: var(--muted); font-size: 13px; line-height: 1.5; }
+.modetxt b { color: var(--text); }
+
+.warn {
+  margin: 0 0 var(--s5);
+  padding: 9px var(--s3);
+  border: 1px dashed color-mix(in srgb, var(--taken) 45%, var(--border));
+  background: color-mix(in srgb, var(--taken) 8%, transparent);
+  border-radius: var(--r2);
+  color: var(--warn-ink);
+  font-size: 12.5px;
+  max-width: var(--measure);
+}
+
+/* ── разделы и строки ───────────────────────────────────────────────────────────────────────────────── */
+.section { margin-bottom: var(--s7); }
+.item { margin-bottom: var(--s3); }
+
+.tag {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--muted2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px var(--s2);
+}
+
+/* Одно предложение менеджера — та строка, по которой владелец понимает, что и почему. */
+.reason {
+  margin: var(--s2) 0 0;
+  padding: var(--s2) var(--s3);
+  border-left: 2px solid var(--border-strong);
+  background: var(--panel2);
+  border-radius: 0 var(--r2) var(--r2) 0;
+  font-size: 13px;
+  line-height: 1.55;
+  max-width: var(--measure);
+  color: var(--muted);
+}
+/* Низкая уверенность — линия говорит об этом молча, не крича цветом внимания. */
+.reason_low { border-left-color: var(--taken); }
+.llmtag {
+  margin-left: var(--s2);
+  font-size: var(--fs-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--warn-ink);
+}
+
+/* Предложенный исполнитель вокруг готовой строки тикета. */
+.suggested { display: inline-flex; align-items: center; gap: 6px; min-width: 0; flex-wrap: wrap; }
+.suggestlbl {
+  font-size: var(--fs-label);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--muted3);
+}
+.holdrow { display: inline-flex; align-items: center; gap: var(--s3); flex-wrap: wrap; }
+
+.live { font-size: var(--fs-xs); font-weight: 600; }
+.live_live { color: var(--fixed); }
+.live_quiet { color: var(--warn-ink); }
+.live_silent { color: var(--danger-ink); }
+
+/* Строка, у которой пропал тикет: видно, что план его знал, но доска — уже нет. */
+.gone {
+  margin-bottom: var(--s3);
+  padding: var(--s3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--r2);
+  color: var(--muted2);
+  font-size: 12.5px;
+  max-width: var(--measure);
+}
+
+/* Эскалации — единственное, что доходит до владельца: почему это не угадали и что теперь делать. */
+.escnote {
+  margin: 0 0 var(--s4);
+  padding: var(--s2) var(--s3);
+  border-left: 2px solid var(--attention);
+  background: color-mix(in srgb, var(--attention) 6%, transparent);
+  border-radius: 0 var(--r2) var(--r2) 0;
+  color: var(--attention-ink);
+  font-size: 12.5px;
+  line-height: 1.5;
+  max-width: var(--measure);
+}
+
+.leave {
+  margin: 0 0 var(--s6);
+  color: var(--muted2);
+  font-size: 12.5px;
+  line-height: 1.5;
+  max-width: var(--measure);
+}
+
+/* ── ссылки и хвосты ────────────────────────────────────────────────────────────────────────────────── */
+.open { color: var(--accent); font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; }
+.open:hover { text-decoration: underline; }
+.action {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-strong);
+  background: var(--panel);
+  border-radius: var(--r2);
+  padding: var(--s2) var(--s4);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+}
+.action:hover { border-color: var(--accent); color: var(--accent); }
+.more { color: var(--muted2); font-size: var(--fs-sm); margin: var(--s2) 0 0; }
+
+/* ── подтверждение назначения прямо в строке ────────────────────────────────────────────────────────── */
+.confirm { display: inline-flex; align-items: center; gap: var(--s2); flex-wrap: wrap; justify-content: flex-end; }
+.applied { color: var(--fixed); font-size: var(--fs-sm); font-weight: 600; white-space: nowrap; }
+.rowerr { color: var(--danger-ink); font-size: 12px; font-weight: 600; max-width: 26ch; text-align: right; }
+
+/* ── «раздать всё уверенное»: показать, потом сделать ───────────────────────────────────────────────── */
+.bulkwrap {
+  display: flex;
+  align-items: baseline;
+  gap: var(--s3);
+  flex-wrap: wrap;
+  margin: var(--s4) 0 var(--s5);
+}
+.bulkhint { color: var(--muted2); font-size: 12.5px; line-height: 1.45; max-width: 52ch; }
+.bulk { min-width: 0; }
+.bulkbox {
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r3);
+  background: var(--panel);
+  box-shadow: var(--shadow-1);
+  padding: var(--s4);
+  max-width: var(--measure);
+}
+.bulkttl { margin: 0 0 var(--s3); font-weight: 600; color: var(--text); font-size: 13.5px; }
+.bulklist { list-style: none; margin: 0 0 var(--s3); padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.bulkrow {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  font-size: 12.5px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--border);
+}
+.bulkrow:last-child { border-bottom: 0; }
+.bulktid { font-family: var(--font-mono); font-size: 11px; color: var(--muted2); flex: none; }
+.bulknote {
+  color: var(--text);
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bulkarrow { color: var(--muted3); flex: none; }
+.bulkto { color: var(--accent-ink); font-weight: 600; flex: none; }
+.bulkok { color: var(--fixed); font-weight: 700; flex: none; }
+.bulkfail { color: var(--danger-ink); font-weight: 600; flex: none; max-width: 30ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bulkfoot { display: flex; align-items: center; justify-content: flex-end; gap: var(--s2); flex-wrap: wrap; }
+.bulkfailnote { color: var(--warn-ink); font-size: 12px; margin-right: auto; }
+
+@media (max-width: 560px) {
+  .rowerr { max-width: none; text-align: left; }
+  .confirm { justify-content: flex-start; }
+}

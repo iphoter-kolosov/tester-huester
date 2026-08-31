@@ -1,4 +1,5 @@
 export { repo, ensureSchema, MAX_ATTACHMENTS, normalizeAttachments, UPDATE_FILTERS, SESSION_LIVE_MS, SILENT_AGENT_MS } from './db'
+export { AUTONOMY_KEY, AUTONOMY_ON, AUTONOMY_ENV, resolveAutonomy, type AutonomyMode } from './autonomy'
 export type {
   Project, Report, NewReport, ReportType, Severity, Attachment, UpdateFilter, AgentProfile,
   AgentSession, SessionGroup, AgentActivity, FlowDay, Orphan, SystemHealth,
