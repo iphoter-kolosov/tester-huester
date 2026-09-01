@@ -86,9 +86,23 @@ function headline(boardName: string | null): string {
   return `tester-huester — the shared board for ${where}. A ticket is how work is handed over between you; the roster is who can receive it.`
 }
 
+/**
+ * TH_AGENT names WHO you are; it does not prove you are the only PROCESS answering to that name. Two worktrees
+ * (or two forks of the same one) that both export the same TH_AGENT share one inbox and one journal cursor without
+ * either knowing it — the failure mode this line exists to head off. `whoami` checks for that every call and warns
+ * by name when it finds one; this is only the forward pointer, so the warning does not land as a surprise.
+ */
+const SESSION_NOTE =
+  'A SEPARATE PROCESS under this same name is possible (another worktree, another fork) — whoami checks for it ' +
+  'every call and names the other one if so. If you are one of several checkouts of this project, set ' +
+  'TH_SESSION_LABEL to something that names THIS one (e.g. the worktree or branch).'
+
 function identityLine(v: IdentityView): string {
   if (v.kind === 'declared') {
-    return `YOU ARE "${v.identity}". Every ticket, comment and status change you make is signed with it, and it is the inbox you read.`
+    return [
+      `YOU ARE "${v.identity}". Every ticket, comment and status change you make is signed with it, and it is the inbox you read.`,
+      SESSION_NOTE,
+    ].join(' ')
   }
   const signed = v.kind === 'fallback' ? `with "${v.signedAs}", the BOARD's own name` : "with the BOARD's own name"
   return [
