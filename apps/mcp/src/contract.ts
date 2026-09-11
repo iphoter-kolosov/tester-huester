@@ -7,6 +7,8 @@ import {
   MAX_AGENT_ROLE_LEN,
   MAX_AGENT_TITLE_LEN,
   STATUSES,
+  STATUS_NEW,
+  STATUS_TAKEN,
   UPDATE_FILTERS,
   normalizeIdentity,
   normalizeVerifyUrl,
@@ -258,6 +260,21 @@ const NEXT_SET_IDENTITY = 'Set TH_AGENT (or pass `agent`) so your work is signed
 const NEXT_REGISTER = 'Call register_agent with a title and a role, so the roster says who you are.'
 const NEXT_LIST = 'Call list_agents before create_task/assign_task — an unknown addressee is refused, and an unaddressed task reaches nobody.'
 
+/** Worded as a fact about THIS identity's inbox, not as an instruction to go check — an agent addressed for the
+ *  first time on a board it has never worked has no reason yet to think of calling my_tasks on its own. */
+const nextOpenTasks = (n: number): string =>
+  `You already have ${n} task${n === 1 ? '' : 's'} waiting here, addressed to you — call my_tasks to see ${n === 1 ? 'it' : 'them'}.`
+
+/**
+ * Work already sitting in an identity's inbox: assigned to it and not yet handed back for review. whoami surfaces
+ * the COUNT (not the list — that is my_tasks's job) so a just-assigned agent's very first call on a board already
+ * says "this is yours", instead of that only surfacing if the agent remembers to ask on its own — which an agent
+ * addressed on a board it has never touched before has no reason yet to do.
+ */
+export function openTaskCount(reports: Report[], identity: string): number {
+  return reports.filter((r) => r.assignee === identity && (r.status === STATUS_NEW || r.status === STATUS_TAKEN)).length
+}
+
 export type WhoAmI = {
   identity: string
   source: IdentitySource
@@ -267,6 +284,8 @@ export type WhoAmI = {
   board: { id: string; name: string } | null
   /** THIS process's session — its fingerprint, so two forks of one handle are told apart in the answer itself. */
   session: { sessionId: string; shortId: string; origin: string; startedAt: number } | null
+  /** Assigned to this identity and not yet handed back — see openTaskCount. */
+  openTasks: number
   warnings: string[]
   next: string[]
 }
@@ -289,6 +308,10 @@ export function describeSelf(x: {
   board: { id: string; name: string } | null
   profile: AgentProfile | null
   session?: SessionSelf | null
+  /** From openTaskCount, computed by the caller — the two servers reach the report window differently (repo vs
+   *  an HTTP fetch), same as session. Defaults to 0 rather than being required, so a caller that could not read
+   *  the board (see extraWarnings) still returns a well-formed answer instead of refusing the whole call. */
+  openTasks?: number
   extraWarnings?: string[]
 }): WhoAmI {
   const { acting, profile } = x
@@ -311,11 +334,15 @@ export function describeSelf(x: {
     }
     if (!profile.active) warnings.push(RETIRED_WARNING)
   }
+  // Ahead of the generic "call list_agents" catch-all: work already addressed to you outranks a reminder to look
+  // around, and it is worth saying even to an agent that just fixed its identity above.
+  if ((x.openTasks ?? 0) > 0) next.push(nextOpenTasks(x.openTasks!))
   next.push(NEXT_LIST)
   return {
     identity: acting.identity,
     source: acting.source,
     origin: ORIGIN[acting.source],
+    openTasks: x.openTasks ?? 0,
     registered: !!profile,
     roster: profile
       ? { title: profile.title, role: profile.role, active: profile.active, lastSeen: profile.lastSeen, boards: profile.boards }

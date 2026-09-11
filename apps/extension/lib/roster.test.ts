@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict'
 import {
-  assignableOn, assigneeOptionsHtml, keepAssignee,
+  assignableOn, assigneeOptionsHtml, keepAssignee, onBoardHandles,
   ASSIGNEE_NOBODY_LABEL, ASSIGNEE_NONE_ON_BOARD_LABEL, ASSIGNEE_UNAVAILABLE_LABEL, ROLE_UNDESCRIBED,
+  ASSIGNEE_GROUP_ON_BOARD, ASSIGNEE_GROUP_OTHERS,
   type ProjectsAnswer,
 } from './roster'
 
-// The shape GET /api/projects answers with: a roster dictionary plus, per board, the handles assignable there.
-// `nomad` is registered on no board, which is why the server offers it on BOTH.
+// The shape GET /api/projects answers with: a roster dictionary plus, per board, EVERY active agent assignable
+// there (`assignable`) and which of them are regulars (`onBoard`). `nomad` is on no board's `onBoard`, so it is
+// only ever offered as an "other" — but still offered, on every board, same as an agent who works elsewhere.
 const ANSWER: ProjectsAnswer = {
   ok: true,
   defaultId: 'p1',
@@ -16,8 +18,8 @@ const ANSWER: ProjectsAnswer = {
     { handle: 'nomad', title: '', role: '' },
   ],
   projects: [
-    { id: 'p1', name: 'tester-huester', assignable: ['huester', 'nomad'] },
-    { id: 'p2', name: 'erental', assignable: ['erental', 'nomad'] },
+    { id: 'p1', name: 'tester-huester', assignable: ['huester', 'nomad'], onBoard: ['huester'] },
+    { id: 'p2', name: 'erental', assignable: ['erental', 'nomad'], onBoard: ['erental'] },
     { id: 'p3', name: 'пустая доска', assignable: [] },
   ],
 }
@@ -96,6 +98,40 @@ const ANSWER: ProjectsAnswer = {
   const html = assigneeOptionsHtml(assignableOn(nasty, 'p1'), null, true)
   assert.ok(!html.includes('<b>'), 'tags are escaped')
   assert.ok(!html.includes('onmouseover="'), 'the tooltip cannot break out of its attribute')
+}
+
+// 9. onBoardHandles reads the per-project set straight off the answer; an unknown/empty board or a server that
+//    never sent the field both come back empty, which is exactly "nothing to group by" for assigneeOptionsHtml.
+{
+  assert.deepEqual(onBoardHandles(ANSWER, 'p1'), new Set(['huester']))
+  assert.deepEqual(onBoardHandles(ANSWER, 'p2'), new Set(['erental']))
+  assert.deepEqual(onBoardHandles(ANSWER, 'p3'), new Set())
+  assert.deepEqual(onBoardHandles(ANSWER, null), new Set())
+  assert.deepEqual(onBoardHandles({ projects: [{ id: 'p1', name: 'x', assignable: ['a'] }] }, 'p1'), new Set(), 'no onBoard field at all → empty, not an error')
+}
+
+// 10. A genuine split renders two <optgroup>s, regulars first, "никому" still ahead of both.
+{
+  const html = assigneeOptionsHtml(assignableOn(ANSWER, 'p1'), null, true, onBoardHandles(ANSWER, 'p1'))
+  const nobodyPos = html.indexOf(ASSIGNEE_NOBODY_LABEL)
+  const onBoardPos = html.indexOf(`<optgroup label="${ASSIGNEE_GROUP_ON_BOARD}">`)
+  const othersPos = html.indexOf(`<optgroup label="${ASSIGNEE_GROUP_OTHERS}">`)
+  assert.ok(nobodyPos >= 0 && onBoardPos > nobodyPos, '"никому" comes before either group')
+  assert.ok(othersPos > onBoardPos, 'regulars group comes before the others group')
+  assert.ok(html.slice(onBoardPos, othersPos).includes('>huester —'), 'huester is grouped as a regular on p1')
+  assert.ok(html.slice(othersPos).includes('>nomad<'), 'nomad, not on p1, lands in the others group instead of being dropped')
+  assert.equal(html.match(/<optgroup/g)?.length, 2, 'exactly two groups, not one per agent')
+}
+
+// 11. No genuine split — everyone assignable is already a regular, or `onBoard` is empty/absent — falls back to
+//     one flat list, unchanged from before grouping existed. A group of one would be worse than no group at all.
+{
+  const allRegulars = assigneeOptionsHtml(assignableOn(ANSWER, 'p1'), null, true, new Set(['huester', 'nomad']))
+  assert.ok(!allRegulars.includes('<optgroup'), 'everyone is a regular → flat list')
+  const noOnBoardInfo = assigneeOptionsHtml(assignableOn(ANSWER, 'p1'), null, true, new Set())
+  assert.ok(!noOnBoardInfo.includes('<optgroup'), 'empty onBoard set → flat list, same as omitting the argument')
+  const omitted = assigneeOptionsHtml(assignableOn(ANSWER, 'p1'), null, true)
+  assert.equal(noOnBoardInfo, omitted, 'an empty set and omitting the 4th argument render identically')
 }
 
 console.log('extension: roster picker tests passed ✓')

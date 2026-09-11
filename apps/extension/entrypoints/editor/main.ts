@@ -17,7 +17,7 @@ import {
   type Draft, type DraftAttachment, type DraftVideo,
 } from '@/lib/draft'
 import { ICON_RECT, ICON_ARROW, ICON_ELLIPSE, ICON_PENCIL, ICON_CROP, ICON_TEXT, ICON_ERASER, TOOL_CURSORS, TOOL_LABELS } from '@/lib/glyphs'
-import { assignableOn, assigneeOptionsHtml, keepAssignee, type ProjectsAnswer } from '@/lib/roster'
+import { assignableOn, assigneeOptionsHtml, keepAssignee, onBoardHandles, type ProjectsAnswer } from '@/lib/roster'
 
 // The collector stores at most this many attachments per report (MAX_ATTACHMENTS in @th/db). Refusing the
 // eleventh here, out loud, beats letting the tester annotate one the server would silently drop.
@@ -610,7 +610,7 @@ asel.addEventListener('change', () => {
 function renderAssignees(): void {
   const agents = assignableOn(projects, projectId)
   assignee = keepAssignee(assignee, agents)
-  asel.innerHTML = assigneeOptionsHtml(agents, assignee, projectsLoaded)
+  asel.innerHTML = assigneeOptionsHtml(agents, assignee, projectsLoaded, onBoardHandles(projects, projectId))
   asel.disabled = !agents.length
 }
 

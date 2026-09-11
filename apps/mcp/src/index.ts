@@ -60,6 +60,7 @@ import {
   checkLinks,
   composeTaskNote,
   describeSelf,
+  openTaskCount,
   registeredAnswer,
   resolveActing,
   rosterAnswer,
@@ -294,6 +295,10 @@ server.tool(
     // filters it out by id, so the warning fires only when there is genuinely another process.
     const live = repo.liveSessions(who.identity)
     const collisionWarning = sessionCollisionWarning(SESSION.sessionId, who.identity, live, Date.now())
+    // Scoped to this project like everything else this server answers — an agent freshly assigned on THIS board,
+    // even one that has never called anything here before, sees it the moment it calls the one tool it must call
+    // first, rather than only if it separately remembers to ask my_tasks.
+    const openTasks = openTaskCount(repo.listReports({ projectId: scopeId ?? undefined, limit: TASK_SCAN_LIMIT }), who.identity)
     return say(
       JSON.stringify(
         describeSelf({
@@ -301,6 +306,7 @@ server.tool(
           board: scoped ? { id: scoped.id, name: scoped.name } : null,
           profile: repo.getAgent(who.identity),
           session: { ...SESSION, collisionWarning },
+          openTasks,
           extraWarnings,
         }),
         null,

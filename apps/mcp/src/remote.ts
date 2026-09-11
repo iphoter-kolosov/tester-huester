@@ -53,6 +53,7 @@ import {
   checkLinks,
   composeTaskNote,
   describeSelf,
+  openTaskCount,
   registeredAnswer,
   resolveActing,
   rosterAnswer,
@@ -347,12 +348,26 @@ server.tool(
     // predates the endpoint returns an error string, surfaced as a warning rather than silently omitting the check.
     const live = await registerSession(who.identity)
     const collisionWarning = 'err' in live ? null : sessionCollisionWarning(SESSION.sessionId, who.identity, live, Date.now())
+    // Same window my_tasks reads, fetched here too so a freshly-assigned agent's very FIRST call already says
+    // "this is yours" — see openTaskCount. Best-effort: a failure here degrades to "0 open tasks", said as a
+    // warning rather than failing the whole call, the same way a roster that could not be read does below.
+    const reportsText = await api('/api/reports', { limit: TASK_SCAN_LIMIT })
+    let openTasks = 0
+    let reportsErr: string | null = null
+    try {
+      const parsed = JSON.parse(reportsText) as { reports?: unknown }
+      if (Array.isArray(parsed.reports)) openTasks = openTaskCount(parsed.reports as Report[], who.identity)
+      else reportsErr = `unexpected answer from ${BASE}/api/reports: ${reportsText.slice(0, 300)}`
+    } catch {
+      reportsErr = `could not check pending tasks: ${reportsText.slice(0, 300)}`
+    }
     // A roster that could not be read is said out loud rather than shown as "not registered" — the two look the
     // same in the answer and mean opposite things.
     const extraWarnings = [
       ...('err' in ref ? [ref.err] : []),
       ...('err' in roster ? [roster.err] : []),
       ...('err' in live ? [live.err] : []),
+      ...(reportsErr ? [reportsErr] : []),
     ]
     const profile = Array.isArray(roster) ? roster.find((a) => a.handle === who.identity) ?? null : null
     return say(
@@ -362,6 +377,7 @@ server.tool(
           board: 'err' in ref ? null : { id: ref.id, name: ref.name },
           profile,
           session: { ...SESSION, collisionWarning },
+          openTasks,
           extraWarnings,
         }),
         null,

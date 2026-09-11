@@ -33,19 +33,26 @@ type AssignableAgent = { handle: string; title: string; role: string }
  * asks "whom can I hand this to", and offering the extension its own handle would be nonsense even if somebody
  * flipped that flag by hand.
  *
- * An agent that has never worked ANY board (`boards` empty) is offered on every board, after the ones that belong
- * to it. The roster is global and checkAssignee — the validator this picker has to agree with — does not look at
- * boards at all, so hiding such an agent would have the picker refuse a handle the server accepts. Ordering, not
- * exclusion, is what says "these are the regulars here".
+ * EVERY active agent is offered on EVERY board — not just the ones whose `boards` already lists this project.
+ * checkAssignee, the validator this picker has to agree with, does not look at boards at all, so an agent that
+ * simply has not yet TOUCHED this particular board is a valid addressee the server would accept; narrowing the
+ * picker to board members was a standing trap, not a feature — it made "assign this to the agent I know does this
+ * work" impossible on the one occasion it matters most: a brand-new board, before that agent has ever connected to
+ * it. `onBoard` on each project entry is the ordering hint: agents already regulars here come first in `assignable`
+ * (and the extension can group by it), everyone else follows — so a long roster still surfaces the usual suspects
+ * first without ever hiding somebody the collector would happily accept.
  */
-function assignableByProject(projects: Project[]): { agents: AssignableAgent[]; assignable: Record<string, string[]> } {
+function assignableByProject(projects: Project[]): { agents: AssignableAgent[]; assignable: Record<string, string[]>; onBoard: Record<string, string[]> } {
   const roster: AgentProfile[] = repo.listAgents({ activeOnly: true }).filter((a) => a.handle !== IDENTITY_EXTENSION)
-  const boardless = roster.filter((a) => !a.boards.length)
   const assignable: Record<string, string[]> = {}
+  const onBoard: Record<string, string[]> = {}
   for (const p of projects) {
-    assignable[p.id] = [...roster.filter((a) => a.boards.includes(p.id)), ...boardless].map((a) => a.handle)
+    const regulars = roster.filter((a) => a.boards.includes(p.id))
+    const others = roster.filter((a) => !a.boards.includes(p.id))
+    assignable[p.id] = [...regulars, ...others].map((a) => a.handle)
+    onBoard[p.id] = regulars.map((a) => a.handle)
   }
-  return { agents: roster.map(({ handle, title, role }) => ({ handle, title, role })), assignable }
+  return { agents: roster.map(({ handle, title, role }) => ({ handle, title, role })), assignable, onBoard }
 }
 
 export function GET(req: Request) {
@@ -63,8 +70,10 @@ export function GET(req: Request) {
   // paragraphs over and over. The client resolves a handle through the dictionary; the decision of who is
   // assignable where stays entirely on this side.
   const rows = repo.listProjects()
-  const { agents, assignable } = assignableByProject(rows)
-  const projects = rows.map((p) => ({ id: p.id, name: p.name, assignable: assignable[p.id]! }))
+  const { agents, assignable, onBoard } = assignableByProject(rows)
+  // `onBoard` is a subset of `assignable`, listed separately rather than nested per-handle: it lets the picker
+  // group "regulars here" from "everyone else" without re-deriving that split from ordering alone.
+  const projects = rows.map((p) => ({ id: p.id, name: p.name, assignable: assignable[p.id]!, onBoard: onBoard[p.id]! }))
   return NextResponse.json({ ok: true, projects, agents, defaultId: own.id }, { headers: CORS })
 }
 
