@@ -19,9 +19,16 @@ async function confirm(formData: FormData) {
   'use server'
   if (!(await isAuthed())) redirect('/login')
   const jar = await cookies()
-  const draft = jar.get(DRAFT_COOKIE)?.value ?? ''
+  // Секрет приходит скрытым полем формы: страница не может писать cookie при отрисовке (Next.js это запрещает).
+  // Подделка поля ничего не даёт: сюда попадает только вошедший владелец, и включается секрет, к которому у него есть код.
+  const draft = String(formData.get('secret') || '')
   const code = String(formData.get('code') || '')
-  if (!/^[A-Z2-7]{32}$/.test(draft) || matchStep(draft, code) === null) redirect('/setup/totp?e=1')
+  if (!/^[A-Z2-7]{32}$/.test(draft)) redirect('/setup/totp')
+  if (matchStep(draft, code) === null) {
+    // Ошибка в коде — тот же QR при повторе: черновик в cookie (действие формы cookie писать может).
+    jar.set(DRAFT_COOKIE, draft, { httpOnly: true, sameSite: 'lax', path: '/setup/totp', maxAge: DRAFT_MAX_AGE, secure: process.env.NODE_ENV === 'production' })
+    redirect('/setup/totp?e=1')
+  }
   repo.setMeta(TOTP_META_KEY, draft)
   jar.delete(DRAFT_COOKIE)
   redirect('/setup/totp?ok=1')
@@ -64,13 +71,10 @@ export default async function TotpSetupPage({ searchParams }: { searchParams: Pr
     )
   }
 
-  // Черновик: тот же секрет при перезагрузке страницы и при ошибке в коде — иначе QR менялся бы под уже сканированным.
+  // Новый QR на каждое открытие; после ошибки в коде — тот же (черновик из cookie, его кладёт действие формы).
   const jar = await cookies()
-  let draft = jar.get(DRAFT_COOKIE)?.value ?? ''
-  if (!/^[A-Z2-7]{32}$/.test(draft)) {
-    draft = generateSecret()
-    jar.set(DRAFT_COOKIE, draft, { httpOnly: true, sameSite: 'lax', path: '/setup/totp', maxAge: DRAFT_MAX_AGE, secure: process.env.NODE_ENV === 'production' })
-  }
+  const kept = jar.get(DRAFT_COOKIE)?.value ?? ''
+  const draft = /^[A-Z2-7]{32}$/.test(kept) ? kept : generateSecret()
   const uri = otpauthUri('tester-huester', 'qa.ihor.work', draft)
   const svg = await QRCode.toString(uri, { type: 'svg', margin: 1, width: 240 })
 
@@ -90,6 +94,7 @@ export default async function TotpSetupPage({ searchParams }: { searchParams: Pr
         </details>
         <form action={confirm} className="login" style={{ marginTop: 16 }}>
           <label className="loginlbl" htmlFor="code">Код из приложения</label>
+          <input type="hidden" name="secret" value={draft} />
           <input id="code" name="code" inputMode="numeric" autoComplete="one-time-code" autoFocus className="logininput" placeholder="123 456" />
           {e ? <div className="loginerr">Код не подошёл — введите следующий из приложения.</div> : null}
           <button type="submit" className="loginbtn">Включить</button>
