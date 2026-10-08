@@ -20,6 +20,8 @@ services:
       UPLOAD_DIR: /data/uploads
       # Required — compose refuses to start if DASH_PASSWORD is unset in the environment/.env.
       DASH_PASSWORD: ${DASH_PASSWORD:?DASH_PASSWORD is required (set it in .env or the shell)}
+      # Необязательно: секрет (base32) для входа кодом из приложения-аутентификатора; заводится кнопкой из хаба (th-totp-enroll).
+      DASH_TOTP_SECRET: ${DASH_TOTP_SECRET:-}
     volumes:
       # Persist the SQLite DB + uploaded blobs across redeploys.
       - th-data:/data

@@ -1,5 +1,6 @@
 import crypto from 'node:crypto'
 import { cookies } from 'next/headers'
+import { matchStep } from './totp'
 
 // Dashboard auth: a single shared password (env DASH_PASSWORD) guards the human-facing views + the PATCH
 // status endpoint. We don't store sessions — the signed cookie IS the proof of knowing the password. The
@@ -38,6 +39,44 @@ export function checkPassword(input: string): boolean {
   const p = password()
   if (!p) return false
   return timingSafeEqual(input, p)
+}
+
+// Вход по коду из приложения-аутентификатора: секрет — DASH_TOTP_SECRET (base32). Пароль остаётся для скриптов
+// (add-agent.mjs, подключение из хаба) и как запасной вход; владелец в панель входит кодом.
+function totpSecret(): string | null {
+  const s = process.env.DASH_TOTP_SECRET
+  return s && s.length > 0 ? s : null
+}
+export function isTotpConfigured(): boolean {
+  return totpSecret() !== null
+}
+/** Шаг последнего принятого кода: тот же код второй раз (перехват в те же 30 с) не проходит. Память процесса — панель один процесс. */
+let lastAcceptedStep = -1
+const FAIL_WINDOW_MS = 10 * 60 * 1000
+const FAIL_MAX = 10
+let fails: number[] = []
+/** Слишком много неверных попыток подряд — пауза: шестизначный код перебирается, если не считать попытки. */
+export function tooManyAttempts(now = Date.now()): boolean {
+  fails = fails.filter((t) => now - t < FAIL_WINDOW_MS)
+  return fails.length >= FAIL_MAX
+}
+export function noteFailure(now = Date.now()): void {
+  fails.push(now)
+}
+export function checkCode(input: string, now = Date.now()): boolean {
+  const s = totpSecret()
+  if (!s) return false
+  const step = matchStep(s, input, now)
+  if (step === null || step <= lastAcceptedStep) return false
+  lastAcceptedStep = step
+  return true
+}
+/** Код из приложения или пароль — одна дверь; что именно ввели, не спрашиваем. */
+export function checkCredential(input: string): boolean {
+  if (tooManyAttempts()) return false
+  const ok = checkCode(input) || checkPassword(input)
+  if (!ok) noteFailure()
+  return ok
 }
 
 function sign(payload: string, secret: string): string {

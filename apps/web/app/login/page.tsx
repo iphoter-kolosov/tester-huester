@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation'
 import { cookies } from 'next/headers'
-import { AUTH_COOKIE, checkPassword, cookieMaxAge, isAuthConfigured, isAuthed, makeAuthCookieValue } from '@/lib/auth'
+import { AUTH_COOKIE, checkCredential, cookieMaxAge, isAuthConfigured, isAuthed, isTotpConfigured, makeAuthCookieValue } from '@/lib/auth'
 
 export const dynamic = 'force-dynamic'
 
@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic'
 async function login(formData: FormData) {
   'use server'
   const pw = String(formData.get('password') || '')
-  if (!checkPassword(pw)) {
+  if (!checkCredential(pw)) {
     redirect('/login?e=1')
   }
   const jar = await cookies()
@@ -27,23 +27,25 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   // No gate configured, or already signed in → nothing to log into.
   if (!isAuthConfigured() || (await isAuthed())) redirect('/')
   const { e } = await searchParams
+  const totp = isTotpConfigured()
   return (
     <main className="wrap" style={{ maxWidth: 380 }}>
       <div className="h" style={{ marginTop: 40 }}>
         <span className="h1">🔒 tester-huester</span>
       </div>
       <form action={login} className="login">
-        <label className="loginlbl" htmlFor="password">Пароль</label>
+        <label className="loginlbl" htmlFor="password">{totp ? 'Код из приложения' : 'Пароль'}</label>
         <input
           id="password"
           name="password"
-          type="password"
+          type={totp ? 'text' : 'password'}
+          inputMode={totp ? 'numeric' : undefined}
           autoFocus
-          autoComplete="current-password"
+          autoComplete={totp ? 'one-time-code' : 'current-password'}
           className="logininput"
-          placeholder="••••••••"
+          placeholder={totp ? '123 456' : '••••••••'}
         />
-        {e ? <div className="loginerr">Неверный пароль.</div> : null}
+        {e ? <div className="loginerr">{totp ? 'Код не подошёл — проверьте время в телефоне и попробуйте следующий.' : 'Неверный пароль.'}</div> : null}
         <button type="submit" className="loginbtn">Войти</button>
       </form>
       <p style={{ color: 'var(--muted)', fontSize: 12, marginTop: 16 }}>

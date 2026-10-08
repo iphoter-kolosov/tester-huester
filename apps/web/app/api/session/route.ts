@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { AUTH_COOKIE, checkPassword, cookieMaxAge, isAuthConfigured, makeAuthCookieValue } from '@/lib/auth'
+import { AUTH_COOKIE, checkCredential, cookieMaxAge, isAuthConfigured, makeAuthCookieValue } from '@/lib/auth'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -40,7 +40,8 @@ export async function POST(req: Request) {
     })
   }
 
-  const password = typeof body.password === 'string' ? body.password : ''
+  // {"code": …} — одноразовый код из приложения (DASH_TOTP_SECRET); та же дверь, что и пароль.
+  const password = typeof body.password === 'string' ? body.password : typeof body.code === 'string' ? body.code : ''
   if (!password) {
     return NextResponse.json(
       {
@@ -51,7 +52,7 @@ export async function POST(req: Request) {
       { status: 400 },
     )
   }
-  if (!checkPassword(password)) {
+  if (!checkCredential(password)) {
     return NextResponse.json(
       {
         ok: false,
