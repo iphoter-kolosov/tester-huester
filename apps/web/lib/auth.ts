@@ -1,6 +1,7 @@
 import crypto from 'node:crypto'
 import { cookies } from 'next/headers'
 import { matchStep } from './totp'
+import { repo } from '@th/db'
 
 // Dashboard auth: a single shared password (env DASH_PASSWORD) guards the human-facing views + the PATCH
 // status endpoint. We don't store sessions — the signed cookie IS the proof of knowing the password. The
@@ -43,7 +44,12 @@ export function checkPassword(input: string): boolean {
 
 // Вход по коду из приложения-аутентификатора: секрет — DASH_TOTP_SECRET (base32). Пароль остаётся для скриптов
 // (add-agent.mjs, подключение из хаба) и как запасной вход; владелец в панель входит кодом.
+// Секрет хранится в базе доски (том th-data, переживает перезапуски); заводится владельцем на странице /setup/totp.
+// DASH_TOTP_SECRET — запасной путь (заведённый раньше через хаб), если в базе секрета нет.
+export const TOTP_META_KEY = 'auth.totp_secret'
 function totpSecret(): string | null {
+  const stored = repo.getMeta(TOTP_META_KEY)
+  if (stored) return stored
   const s = process.env.DASH_TOTP_SECRET
   return s && s.length > 0 ? s : null
 }

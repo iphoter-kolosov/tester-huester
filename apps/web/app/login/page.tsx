@@ -34,11 +34,11 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <span className="h1">🔒 tester-huester</span>
       </div>
       <form action={login} className="login">
-        <label className="loginlbl" htmlFor="password">{totp ? 'Код из приложения' : 'Пароль'}</label>
+        <label className="loginlbl" htmlFor="password">{totp ? 'Код из приложения или пароль' : 'Пароль'}</label>
         <input
           id="password"
           name="password"
-          type={totp ? 'text' : 'password'}
+          type="password"
           inputMode={totp ? 'numeric' : undefined}
           autoFocus
           autoComplete={totp ? 'one-time-code' : 'current-password'}
@@ -49,7 +49,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
         <button type="submit" className="loginbtn">Войти</button>
       </form>
       <p style={{ color: 'var(--muted)', fontSize: 12, marginTop: 16 }}>
-        Агентам и расширению вход не нужен — паролем закрыта только панель.
+        Агентам и расширению вход не нужен — паролем закрыта только панель.{totp ? null : <> После входа можно включить вход по коду из приложения: <a href="/setup/totp">/setup/totp</a>.</>}
       </p>
     </main>
   )
