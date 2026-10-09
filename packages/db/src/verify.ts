@@ -517,6 +517,27 @@ export function checkStatusTransition(
     }
   }
 
+  // Один тикет — один исполнитель. Два агента (ноутбук и хаб) взяли одно и то же — правят одни файлы и спорят
+  // отчётами. Пока тикет в работе у другого, второй не может ни взять его, ни сдать: пусть пишет комментарий
+  // держателю или владелец переназначит (владелец проходит выше, ему можно всё).
+  if (
+    actor.kind === 'agent' &&
+    (status === STATUS_TAKEN || status === STATUS_NEEDS_REVIEW) &&
+    ticket.status === STATUS_TAKEN &&
+    ticket.takenBy &&
+    !sameIdentity(actor.identity, ticket.takenBy)
+  ) {
+    return {
+      ok: false,
+      err: {
+        error: 'held_by_other',
+        message:
+          `This ticket is already taken by "${ticket.takenBy}". One ticket — one executor: do not work on it in parallel. ` +
+          `Leave a comment for the holder if you have something to add; the owner can reassign it.`,
+      },
+    }
+  }
+
   const comment = typeof body.comment === 'string' ? body.comment.trim().slice(0, MAX_BODY) : ''
   const verifyUrl = normalizeVerifyUrl(body.verifyUrl)
   const verifySteps = normalizeSteps(body.verifySteps)

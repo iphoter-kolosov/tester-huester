@@ -246,9 +246,9 @@ t('finishing a ticket nobody claimed stamps the finisher as holder, so a rejecti
   const r = checkStatusTransition('needs_review', WORK_REPORT, ticket({ status: 'new', takenBy: null }), asAgent(EXECUTOR))
   assert.equal(r.ok === true && r.takenBy, EXECUTOR)
 })
-t('a ticket already held is not silently taken over by the finisher', () => {
+t('a ticket already held by another agent cannot be finished by a second one — held_by_other, not a silent parallel report', () => {
   const r = checkStatusTransition('needs_review', WORK_REPORT, ticket({ status: STATUS_TAKEN, takenBy: 'someone-else' }), asAgent(EXECUTOR))
-  assert.equal(r.ok === true && r.takenBy, null)
+  assert.equal(!r.ok && r.err.error, 'held_by_other')
 })
 t('the owner still closes a ticket in one click — no work report demanded of the board owner', () => {
   const r = checkStatusTransition('fixed', {}, ticket(), OWNER)
@@ -414,6 +414,18 @@ t('the work itself is untouched by a missing role: take a ticket, report on it, 
   assert.equal(checkStatusTransition(STATUS_TAKEN, {}, ticket(), asAgent(NAMELESS)).ok, true)
   assert.equal(checkStatusTransition(STATUS_NEEDS_REVIEW, WORK_REPORT, ticket({ status: STATUS_TAKEN, takenBy: NAMELESS }), asAgent(NAMELESS)).ok, true)
   assert.equal(checkStatusTransition('wontfix', { comment: 'не воспроизводится' }, ticket(), asAgent(NAMELESS)).ok, true)
+})
+
+t('один тикет — один исполнитель: чужой взятый тикет второй агент не берёт и не сдаёт; владелец может всё', () => {
+  const held = ticket({ status: STATUS_TAKEN, takenBy: 'hub-erental' })
+  const r = checkStatusTransition(STATUS_TAKEN, {}, held, asAgent('erental'))
+  assert.equal(r.ok, false)
+  assert.equal(!r.ok && r.err.error, 'held_by_other')
+  const r2 = checkStatusTransition(STATUS_NEEDS_REVIEW, WORK_REPORT, held, asAgent('erental'))
+  assert.equal(!r2.ok && r2.err.error, 'held_by_other')
+  assert.equal(checkStatusTransition(STATUS_NEEDS_REVIEW, WORK_REPORT, held, asAgent('hub-erental')).ok, true)
+  assert.equal(checkStatusTransition(STATUS_TAKEN, {}, ticket({ status: 'rejected', takenBy: 'hub-erental' }), asAgent('erental')).ok, true)
+  assert.equal(checkStatusTransition(STATUS_TAKEN, {}, held, OWNER).ok, true)
 })
 
 console.log(`db/verify: all ${passed} tests passed ✓`)
