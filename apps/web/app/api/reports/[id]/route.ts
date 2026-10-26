@@ -102,6 +102,22 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     // what lets an agent hand a ticket to itself on its very first call.
     if (speaker.rosterHandle) repo.touchAgent(speaker.rosterHandle, project.id)
 
+    // Moving a ticket to another board — the hub's dispatcher (Huyester) does it when the owner filed a capture on the
+    // board he had picked last time, not the one the site belongs to. Authority is BOTH keys: this board's read key lets
+    // the ticket go, and only a holder of the target board's read key may put work there — so an agent of one project
+    // can never push tickets onto a board it has no business on. A move is its own request: mixing it with a status or
+    // assignee write would leave "which board was the status judged on" ambiguous.
+    if ('toProjectKey' in body) {
+      const target = repo.getProjectByReadKey(String(body.toProjectKey ?? ''))
+      if (!target) return NextResponse.json({ ok: false, error: 'bad_target_key' }, { status: 403 })
+      if (target.id === report.projectId) return NextResponse.json({ ok: true, moved: false })
+      if (!repo.moveReport(report.id, target.id)) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
+      repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'moved', actor: actor.identity, detail: `ticket moved to ${target.name}`, session: writeSession })
+      repo.logEvent({ projectId: target.id, reportId: report.id, kind: 'moved', actor: actor.identity, detail: `ticket moved in from ${project.name}`, session: writeSession })
+      if (speaker.rosterHandle) repo.touchAgent(speaker.rosterHandle, target.id)
+      return NextResponse.json({ ok: true, moved: true, projectId: target.id })
+    }
+
     const hasStatus = 'status' in body
     const hasAssignee = 'assignee' in body
     if (!hasStatus && !hasAssignee) {
