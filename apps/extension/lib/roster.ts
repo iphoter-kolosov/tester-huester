@@ -24,7 +24,7 @@ export type ProjectsAnswer = {
   defaultId?: string
 }
 
-export const ASSIGNEE_NOBODY_LABEL = '— никому (разберёт владелец)'
+export const ASSIGNEE_NOBODY_LABEL = '— Хуестеру (сам разведёт)'
 export const ASSIGNEE_NONE_ON_BOARD_LABEL = 'на этой доске пока нет агентов'
 export const ASSIGNEE_GROUP_ON_BOARD = 'Уже работают здесь'
 export const ASSIGNEE_GROUP_OTHERS = 'Другие агенты (ещё не были на этой доске)'
