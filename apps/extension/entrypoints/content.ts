@@ -3,6 +3,7 @@ import type { Prim, ReproBundle, Tool, Width } from '@th/core'
 import { getConfig, setConfig } from '@/lib/config'
 import { buildReport, type ReportType, type Severity } from '@/lib/report'
 import { requestBundle } from '@/lib/bridge'
+import { isolateKeys } from '@/lib/keys'
 import { loadDraft, saveDraft, flushDrafts, clearDraft, hasContent, type Draft, type DraftVideo } from '@/lib/draft'
 import { assignableOn, assigneeOptionsHtml, keepAssignee, onBoardHandles, ASSIGNEE_NOBODY_LABEL, type ProjectsAnswer } from '@/lib/roster'
 import { ICON_RECT, ICON_ARROW, ICON_ELLIPSE, ICON_PENCIL, ICON_CROP, ICON_TEXT, ICON_ERASER, TOOL_CURSORS, TOOL_LABELS } from '@/lib/glyphs'
@@ -543,6 +544,9 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
         </div>
       </div>
     </div>`
+  // Keys typed into our fields stay ours: the page under the overlay must not pan, scroll or cancel them
+  // (balatonmap swallowed every Space of a report). See lib/keys.ts.
+  isolateKeys(host)
   document.documentElement.appendChild(host)
 
   const q = <T extends Element>(s: string) => root.querySelector(s) as T
