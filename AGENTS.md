@@ -16,6 +16,8 @@ Extracted from the QA/feedback system built inside eRENTAL.
 - **Releasing the extension:** bump `apps/extension/package.json` version, run
   `scripts/release-extension.sh "что нового" …`, commit, deploy the board — installed extensions see
   «⬆ Новая версия» via `GET /api/extension`.
+  An unpacked install whose folder gets the new files reloads itself within ~2 min (`lib/selfupdate.ts`,
+  needs developer mode on in that browser profile — it is, wherever «Load unpacked» was used).
 
 ## Orient before you build — three things worth internalizing
 

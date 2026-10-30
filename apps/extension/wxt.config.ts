@@ -17,7 +17,8 @@ export default defineConfig({
     // unlimitedStorage: a capture draft (see lib/draft.ts) holds a 1–3 MB base screenshot plus stills sampled
     // from the recording. The default 10 MB storage.local quota would start rejecting writes — and a draft
     // that fails to save is exactly the data loss the draft store exists to prevent.
-    permissions: ['activeTab', 'tabs', 'storage', 'unlimitedStorage', 'scripting', 'tabCapture', 'offscreen'],
+    // alarms: the self-update check (lib/selfupdate.ts) must survive the worker going to sleep.
+    permissions: ['activeTab', 'tabs', 'storage', 'unlimitedStorage', 'scripting', 'tabCapture', 'offscreen', 'alarms'],
     host_permissions: ['<all_urls>'],
     commands: {
       capture: {

@@ -1,7 +1,28 @@
 // Two jobs: (1) screenshot the visible tab on the shortcut / popup button and hand it to the page's overlay;
 // (2) forward the finished report to the collector from the EXTENSION context — background fetches are not
 // subject to the page's CSP, so the POST works on any site.
+import { ALARM, CHECK_MINUTES, diskVersion, shouldReload } from '@/lib/selfupdate'
+
 export default defineBackground(() => {
+  // Self-update of the unpacked install (lib/selfupdate.ts): new files in the folder → reload, no ⟳ by hand.
+  // An alarm, not setInterval: the MV3 worker sleeps between events and a timer dies with it.
+  let seenOnDisk: string | null = null
+  chrome.alarms.create(ALARM, { periodInMinutes: CHECK_MINUTES })
+  chrome.alarms.onAlarm.addListener((a) => {
+    if (a.name !== ALARM) return
+    void (async () => {
+      const running = chrome.runtime.getManifest().version
+      const onDisk = await diskVersion()
+      const reload = shouldReload(running, onDisk, seenOnDisk)
+      seenOnDisk = onDisk
+      if (!reload) return
+      // A tab recording lives in the offscreen document; reloading would cut the video the tester is making.
+      if (await chrome.offscreen.hasDocument().catch(() => false)) { console.info('[th] self-update: recording in progress, later'); return }
+      console.info(`[th] self-update: ${running} → ${onDisk}, reloading`)
+      chrome.runtime.reload()
+    })()
+  })
+
   // Send TH_OPEN to the tab's content script. If it isn't there (the tab was opened BEFORE the extension
   // loaded, so the declarative content script never ran), inject it on demand and retry — capture then works
   // on any already-open tab without a manual page reload.
