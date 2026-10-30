@@ -27,6 +27,10 @@ Extracted from the QA/feedback system built inside eRENTAL.
    with no extra "pick element" click. Keep extending this axis.
 3. **The overlay lives on someone else's page.** Keys typed into it must never reach the host site
    (`lib/keys.ts`, `isolateKeys`) — a map site once swallowed every Space of a report.
+4. **The tester does not classify.** Since 0.2.2 the overlay and editor have no type/severity/project/assignee
+   pickers: every report goes as a `med` bug to the ingest key's board, unaddressed, and the hub's Хуестер routes
+   it. Hotkey layouts live in `lib/layout.ts` (default `gamer`, stored extension-wide); every key caption is
+   derived from it — never hardcode a key letter in markup.
 
 ## Repo facts (so you don't get surprised)
 

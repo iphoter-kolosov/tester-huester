@@ -1,12 +1,12 @@
 import { ImageAnnotator, DEFAULT_COLORS, bestSelector, markElements } from '@th/core'
 import type { MarkCandidate, MarkedElement, Prim, ReproBundle, Tool, Width } from '@th/core'
-import { getConfig, setConfig } from '@/lib/config'
+import { getConfig } from '@/lib/config'
 import { buildReport, type ReportType, type Severity } from '@/lib/report'
 import { requestBundle } from '@/lib/bridge'
 import { isolateKeys } from '@/lib/keys'
 import { newerRelease } from '@/lib/update'
 import { loadDraft, saveDraft, flushDrafts, clearDraft, hasContent, type Draft, type DraftVideo } from '@/lib/draft'
-import { assignableOn, assigneeOptionsHtml, keepAssignee, onBoardHandles, ASSIGNEE_NOBODY_LABEL, type ProjectsAnswer } from '@/lib/roster'
+import { LAYOUT_LABELS, LAYOUT_STORE_KEY, REDO_CODES, TOOL_LAYOUTS, TOOL_ORDER, UNDO_CODES, WIDTH_LAYOUTS, isLayout, loadLayout, onLayoutChange, saveLayout, toolKey, toolKeysShort, widthKeys, type Layout } from '@/lib/layout'
 import { ICON_RECT, ICON_ARROW, ICON_ELLIPSE, ICON_PENCIL, ICON_CROP, ICON_TEXT, ICON_ERASER, TOOL_CURSORS, TOOL_LABELS } from '@/lib/glyphs'
 import {
   startReplay, bindVisibility, snapshotReplay, startExplicitClip, stopExplicitClip, clipSeconds,
@@ -115,12 +115,6 @@ const TYPES: { value: ReportType; label: string; icon: string }[] = [
   { value: 'fix', label: 'Правка', icon: '✏️' },
   { value: 'text', label: 'Текст', icon: '📝' },
 ]
-const SEVERITIES: { value: Severity; label: string }[] = [
-  { value: 'low', label: 'low' },
-  { value: 'med', label: 'med' },
-  { value: 'high', label: 'high' },
-  { value: 'crit', label: 'crit' },
-]
 const WIDTHS: { value: Width; label: string }[] = [
   { value: 'thin', label: 'Тонкая' },
   { value: 'med', label: 'Средняя' },
@@ -152,8 +146,9 @@ const CSS = `
 .side { flex: 0 0 232px; width: 232px; display: flex; flex-direction: column; gap: 7px; min-height: 0; }
 /* Middle section scrolls only when the viewport is genuinely too short (short laptops); otherwise everything
    is visible without a scrollbar. Never clip: cutting off controls the tester will never find is worse than
-   a thin scrollbar. The footer (record/send/cancel) stays pinned below via .sidefoot. */
-.sidescroll { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 7px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; padding-right: 3px; }
+   a thin scrollbar. The footer (record/send/cancel) follows the controls directly instead of sinking to the
+   bottom of the column — with the pickers gone the rail is short, and a gap above Send reads as something missing. */
+.sidescroll { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 7px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; padding-right: 3px; }
 .sidescroll::-webkit-scrollbar { width: 6px; }
 .sidescroll::-webkit-scrollbar-thumb { background: #2b3a55; border-radius: 3px; }
 .main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
@@ -181,10 +176,6 @@ const CSS = `
 .grpttl { font-size: 9.5px; font-weight: 800; color: #8ea0bd; text-transform: uppercase; letter-spacing: .05em; margin-bottom: 1px; }
 .rowx { display: flex; gap: 5px; flex-wrap: wrap; }
 .side .tb { height: 30px; padding: 0 9px; flex: 0 0 auto; }
-.side .seg { display: grid; grid-template-columns: 1fr 1fr; width: 100%; }
-.side .seg.sev { grid-template-columns: repeat(4, 1fr); }
-.side .seg button { height: 28px; padding: 0 4px; border-right: 1px solid #223049; border-bottom: 1px solid #223049; font-size: 11.5px; }
-.side .psel, .side .asel { width: 100%; max-width: 100%; }
 .sidefoot { flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; padding-top: 6px; border-top: 1px solid #223049; }
 .sidefoot .btn { margin-left: 0; width: 100%; height: 38px; }
 .sidefoot .msg { min-height: 15px; line-height: 1.25; }
@@ -259,20 +250,6 @@ const CSS = `
 .tb:disabled { opacity: .4; cursor: default; }
 .vsep { width: 1px; align-self: stretch; background: #223049; margin: 2px 3px; }
 .sep { flex: 1; }
-.meta { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.meta label { font-size: 11.5px; font-weight: 800; color: #8ea0bd; text-transform: uppercase; letter-spacing: .04em; }
-.seg { display: inline-flex; border: 1px solid #223049; border-radius: 8px; overflow: hidden; }
-.seg button { height: 30px; padding: 0 11px; border: 0; border-right: 1px solid #223049; background: #0f1626; color: #e6edf7; font-size: 12.5px; font-weight: 700; cursor: pointer; }
-.seg button:last-child { border-right: 0; }
-.seg button.on { background: #0a84ff; color: #fff; }
-.seg.sev button.on[data-v="low"] { background: #3f6212; }
-.seg.sev button.on[data-v="med"] { background: #a16207; }
-.seg.sev button.on[data-v="high"] { background: #c2410c; }
-.seg.sev button.on[data-v="crit"] { background: #b91c1c; }
-.psel, .asel { height: 30px; padding: 0 9px; border: 1px solid #223049; background: #0f1626; color: #e6edf7; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; max-width: 190px; }
-.psel:hover, .asel:not(:disabled):hover { border-color: #38bdf8; }
-/* disabled = there is nobody to address on this board, or the roster never arrived. The option text says which. */
-.asel:disabled { color: #8ea0bd; cursor: default; font-weight: 600; }
 .khint { margin-left: auto; font-size: 11px; font-weight: 700; color: #8ea0bd; }
 .khint b { color: #38bdf8; font-weight: 800; }
 /* the comment box: full width under the canvas, a comfortable share of the height */
@@ -281,7 +258,6 @@ const CSS = `
 /* Short viewports / narrow windows: tighten the rail rather than pushing anything out of reach. */
 @media (max-height: 900px) {
   .side .tb { height: 28px; padding: 0 8px; }
-  .side .seg button { height: 26px; }
   .sidefoot .btn { height: 34px; }
   .note { flex-basis: 22%; min-height: 62px; }
 }
@@ -436,12 +412,12 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
           <div class="side">
             <div class="sidescroll">
             <div class="grp">
-              <span class="grpttl">Инструмент
+              <span class="grpttl">Инструмент <span class="grpkey tkeys"></span>
                 <span class="lyt">
-                  <button class="lytbtn" title="Раскладка клавиш"><span class="lytname">designer</span> ▾</button>
+                  <button class="lytbtn" title="Раскладка горячих клавиш"><span class="lytname">Игрок</span> ▾</button>
                   <div class="lytpop">
-                    <button class="lyto" data-lyt="designer"><b>Designer</b><i>буквы-мнемоника<br>R А O P C T E</i></button>
-                    <button class="lyto" data-lyt="gamer"><b>Gamer (CS)</b><i>инструменты как оружие: 1-7<br>Q — undo · R — redo · Z/X/M — толщина</i></button>
+                    <button class="lyto" data-lyt="gamer"><b>Игрок (CS)</b><i>инструменты как оружие: 1–7<br>Q — отменить · R — вернуть · Z / X / M — толщина</i></button>
+                    <button class="lyto" data-lyt="designer"><b>Дизайнер</b><i>буквы по первым звукам:<br>R A O P C T E · толщина 1 / 2 / 3</i></button>
                   </div>
                 </span>
               </span>
@@ -463,29 +439,9 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
               <div class="cbar" role="slider" aria-label="Цвет"><span class="cknob" style="color:${DEFAULT_COLORS[0]}"></span></div>
             </div>
             <div class="grp">
-              <span class="grpttl">Размер <span class="grpkey">(1 / 2 / 3)</span></span>
+              <span class="grpttl">Размер <span class="grpkey wkeys"></span></span>
               <div class="wbar" role="slider" aria-label="Толщина"><span class="wwedge"></span><span class="wknob"></span></div>
               <div class="wtags"><span>тонко</span><span>средне</span><span>толсто</span></div>
-            </div>
-            <div class="grp">
-              <span class="grpttl">Тип</span>
-              <div class="seg type">
-                ${TYPES.map((t) => `<button data-v="${t.value}"${t.value === 'bug' ? ' class="on"' : ''}>${t.icon} ${t.label}</button>`).join('')}
-              </div>
-            </div>
-            <div class="grp">
-              <span class="grpttl">Важность</span>
-              <div class="seg sev">
-                ${SEVERITIES.map((s) => `<button data-v="${s.value}"${s.value === 'med' ? ' class="on"' : ''}>${s.label}</button>`).join('')}
-              </div>
-            </div>
-            <div class="grp">
-              <span class="grpttl">Проект</span>
-              <select class="psel"><option value="">по умолчанию</option></select>
-            </div>
-            <div class="grp">
-              <span class="grpttl">Исполнитель</span>
-              <select class="asel" disabled><option value="">${ASSIGNEE_NOBODY_LABEL}</option></select>
             </div>
             <div class="clip">
               <span class="clipq"></span>
@@ -504,7 +460,7 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
               <button class="btn ghost toed" title="Продолжить в отдельном окне: страница больше не сможет помешать — можно добавлять вложения, вставлять картинки из буфера и не бояться перезагрузки сайта">⇗ Открыть в окне</button>
               <button class="btn send">Send</button>
               <button class="btn ghost cancel">Cancel</button>
-              <span class="khint"><b>Ctrl+Enter</b> отправить · <b>Esc</b> свернуть (черновик сохранится)</span>
+              <span class="khint"><b>Ctrl+Enter</b> отправить · <b>Esc</b> свернуть (черновик сохранится) · <b>?</b> все клавиши</span>
             </div>
           </div>
           <div class="main">
@@ -584,8 +540,6 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
   const tin = q<HTMLElement>('.tin')
   const tinInput = q<HTMLInputElement>('.tin input')
   const tmark = q<HTMLElement>('.tmark')
-  const psel = q<HTMLSelectElement>('.psel')
-  const asel = q<HTMLSelectElement>('.asel')
   const recBtn = q<HTMLButtonElement>('.rec')
   const reshotBtn = q<HTMLButtonElement>('.reshot')
   const recstEl = q<HTMLElement>('.recst')
@@ -601,17 +555,14 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
   const edTot = q<HTMLElement>('.edtot')
   const edSum = q<HTMLElement>('.edsum')
 
-  // Form state (shared with track A via the exact field names note/type/severity).
-  let type: ReportType = draft?.type ?? 'bug'
-  let severity: Severity = draft?.severity ?? 'med'
-  let projectId: string | null = draft?.projectId ?? null // chosen in the project picker; null → route by the ingest key
-  // Whom the ticket is FOR. null — nobody, and that stays the default: an unaddressed capture is a legitimate
-  // ticket, and it is most of them.
-  let assignee: string | null = draft?.assignee ?? null
-  // The whole roster answer, kept so changing the project repopulates the addressee list without a second
-  // request — the two pickers are one decision and must not be a round trip apart.
-  let projects: ProjectsAnswer = {}
-  let projectsLoaded = false
+  // The report's classification is no longer asked for: Хуестер on the hub reads the note and the page and files
+  // the ticket on the right board for the right agent, so a picker would only be a second, worse guess. Every
+  // report leaves as a medium bug on the ingest key's board, unaddressed. A draft from an older build may still
+  // carry its own type/project/addressee — they are deliberately not honoured, since nothing on screen shows them.
+  const type: ReportType = 'bug'
+  const severity: Severity = 'med'
+  const projectId: string | null = null
+  const assignee: string | null = null
   let pendingText: { x: number; y: number } | null = null
   // True while the restored draft is being put back on screen. The annotator fires onChange during that, and
   // autosaving mid-restore would write an empty markup stack over the one we are in the middle of restoring.
@@ -717,27 +668,12 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
   // NOT e.key — so they work under any keyboard layout (RU/EN/HU) and on every OS, where e.key would return a
   // layout-dependent character (physical P → 'з' on the Russian layout) and the mapping would miss. Single-key
   // shortcuts are skipped while typing in a field; the undo/redo stack is the annotator's unified one (draw+crop).
-  // Two hotkey layouts the tester can switch between (a dropdown next to the tools row shows the mapping):
-  //   • designer — mnemonic letters (R rectangle, A arrow, O oval, P pencil, C crop, T text, E eraser)
-  //   • gamer — CS-style, tools bound to number-row like weapons and the workhorse keys (Q undo, E redo)
-  //     so a player-tester keeps left-hand muscle memory and never has to hunt.
-  const TOOL_LAYOUTS: Record<'designer' | 'gamer', Record<string, Tool>> = {
-    designer: { KeyR: 'rect', KeyA: 'arrow', KeyO: 'ellipse', KeyP: 'draw', KeyC: 'crop', KeyT: 'text', KeyE: 'eraser' },
-    gamer: { Digit1: 'rect', Digit2: 'arrow', Digit3: 'ellipse', Digit4: 'draw', Digit5: 'crop', Digit6: 'text', Digit7: 'eraser' },
-  }
-  const WIDTH_LAYOUTS: Record<'designer' | 'gamer', Record<string, Width>> = {
-    designer: { Digit1: 'thin', Digit2: 'med', Digit3: 'thick', Numpad1: 'thin', Numpad2: 'med', Numpad3: 'thick' },
-    // In gamer mode the digits pick TOOLS (weapons), so width lives on the middle row — Shift+A/S/D or the QWE
-    // above the tools row.
-    gamer: { KeyZ: 'thin', KeyX: 'med', KeyM: 'thick' },
-  }
-  const LAYOUT_KEY = 'th.layout'
-  let layout: 'designer' | 'gamer' = (localStorage.getItem(LAYOUT_KEY) as 'designer' | 'gamer' | null) || 'designer'
-  const setLayout = (l: 'designer' | 'gamer') => { layout = l; localStorage.setItem(LAYOUT_KEY, l); syncLayoutUI() }
+  // Two hotkey layouts (lib/layout.ts), switched from the dropdown next to the tools row. The choice is
+  // extension-wide in chrome.storage; the first paint uses the default and the stored choice lands a tick later.
+  let layout: Layout = 'gamer'
   let TOOL_CODES = TOOL_LAYOUTS[layout]
   let WIDTH_CODES = WIDTH_LAYOUTS[layout]
-  const UNDO_KEYS = () => (layout === 'gamer' ? ['KeyQ'] : []) // Ctrl+Z always works too
-  const REDO_KEYS = () => (layout === 'gamer' ? ['KeyR'] : [])
+  const setLayout = (l: Layout) => { layout = l; void saveLayout(l); syncLayoutUI() }
   function onKey(e: KeyboardEvent) {
     const ae = root.activeElement as HTMLElement | null
     const typing = !!ae && (ae.tagName === 'TEXTAREA' || ae.tagName === 'INPUT')
@@ -752,9 +688,9 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
     if (code === 'Escape') { if (typing) return; e.preventDefault(); close(); return }
     if (typing) return
 
-    // Gamer-mode single-key aliases for undo/redo (Q/E, CS drop/use muscle memory).
-    if (UNDO_KEYS().includes(code)) { e.preventDefault(); ann.undo(); return }
-    if (REDO_KEYS().includes(code)) { e.preventDefault(); ann.redo(); return }
+    // Gamer-mode single-key aliases for undo/redo (Q/R, CS drop/reload muscle memory).
+    if (UNDO_CODES[layout].includes(code)) { e.preventDefault(); ann.undo(); return }
+    if (REDO_CODES[layout].includes(code)) { e.preventDefault(); ann.redo(); return }
 
     if (e.shiftKey && (code === 'Delete' || code === 'Backspace')) { e.preventDefault(); ann.clearAll(); return }
     if (code === 'Slash' && e.shiftKey) { e.preventDefault(); kpop.classList.toggle('on'); return } // "?" — cheat sheet
@@ -780,14 +716,7 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
     const t = TYPES.find((x) => x.value === type)!
     titleEl.textContent = `${t.icon} ${t.label} — сообщить`
   }
-  // Reflect the current type/severity onto the segmented controls. Needed because a restored draft can arrive
-  // with values the markup's hardcoded defaults do not match.
-  const syncTypeSev = () => {
-    root.querySelectorAll('.seg.type button').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.v === type))
-    root.querySelectorAll('.seg.sev button').forEach((b) => b.classList.toggle('on', (b as HTMLElement).dataset.v === severity))
-    syncTitle()
-  }
-  syncTypeSev()
+  syncTitle()
 
   // Show the tester what technical context was captured alongside the screenshot.
   const hint = q<HTMLElement>('.ctxhint')
@@ -1195,7 +1124,7 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
     if (!loaded) setMsg('Could not load screenshot', 'err')
     if (restored) {
       // The note is the ONLY part of a draft the tester typed by hand, and it was the one part never put back:
-      // type/severity/project/assignee are restored at their declarations, the backdrop and markup just above.
+      // the backdrop and markup are restored just above.
       // Worse than losing it on screen — the persist() two lines down then wrote the EMPTY textarea over the
       // stored text, so the reload the draft store exists to survive was the very thing that destroyed it.
       note.value = restored.note ?? ''
@@ -1239,9 +1168,6 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
     draftDead = true
     restBar.classList.remove('on')
     note.value = ''
-    type = 'bug'
-    severity = 'med'
-    syncTypeSev()
     video = null
     attach = true
     trim = null
@@ -1332,33 +1258,40 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
   const lytPop = q<HTMLElement>('.lytpop')
   const lytName = q<HTMLElement>('.lytname')
   function syncLayoutUI() {
-    lytName.textContent = layout
+    lytName.textContent = LAYOUT_LABELS[layout]
     root.querySelectorAll('.lyto').forEach((el) => el.classList.toggle('on', (el as HTMLElement).dataset.lyt === layout))
     TOOL_CODES = TOOL_LAYOUTS[layout]
     WIDTH_CODES = WIDTH_LAYOUTS[layout]
-    // Rewrite tool tooltips so hovering shows the CURRENT layout's key, not a stale one.
-    const keyFor = (t: Tool) => Object.entries(TOOL_CODES).find(([, v]) => v === t)?.[0]?.replace(/^Key|^Digit/, '') || '—'
+    // Every place that names a key is rewritten here, so none of them can teach a key that is not bound.
     root.querySelectorAll('.tb.tool').forEach((el) => {
       const t = (el as HTMLElement).dataset.tool as Tool
-      ;(el as HTMLElement).title = `${TOOL_LABELS[t]} · ${keyFor(t)}`
+      ;(el as HTMLElement).title = `${TOOL_LABELS[t]} · ${toolKey(layout, t)}`
     })
-    renderKeys(keyFor)
+    const undoK = UNDO_CODES[layout].map((c) => c.replace(/^Key/, ''))
+    const redoK = REDO_CODES[layout].map((c) => c.replace(/^Key/, ''))
+    q<HTMLElement>('[data-act="undo"]').title = `Отменить · ${[...undoK, 'Ctrl+Z'].join(' или ')}`
+    q<HTMLElement>('[data-act="redo"]').title = `Вернуть · ${[...redoK, 'Ctrl+Y'].join(' или ')}`
+    q<HTMLElement>('.tkeys').textContent = toolKeysShort(layout)
+    q<HTMLElement>('.wkeys').textContent = `(${widthKeys(layout)})`
+    renderKeys()
   }
   // The cheat sheet follows the CURRENT layout, so it never teaches a key that is not bound.
   const kpop = q<HTMLElement>('.kpop')
-  function renderKeys(keyFor: (t: Tool) => string): void {
+  function renderKeys(): void {
     const row = (k: string, what: string) => `<div><b>${k}</b>${what}</div>`
-    const widthKeys = Object.entries(WIDTH_CODES).filter(([c]) => !c.startsWith('Numpad')).map(([c]) => c.replace(/^Key|^Digit/, '')).join(' / ')
+    const undoK = UNDO_CODES[layout].map((c) => c.replace(/^Key/, ''))
+    const redoK = REDO_CODES[layout].map((c) => c.replace(/^Key/, ''))
     kpop.innerHTML =
+      `<h4>Раскладка «${LAYOUT_LABELS[layout]}» — сменить можно у строки «Инструмент»</h4>` +
       '<h4>Отправка и правка</h4>' +
       row('Ctrl + Enter', 'отправить') +
-      row('Ctrl + Z', 'отменить') + row('Ctrl + Y', 'вернуть') +
-      (layout === 'gamer' ? row('Q / R', 'отменить / вернуть') : '') +
+      row([...undoK, 'Ctrl + Z'].join(' / '), 'отменить') +
+      row([...redoK, 'Ctrl + Y'].join(' / '), 'вернуть') +
       row('Shift + Del', 'стереть все пометки') +
       row('Esc', 'закрыть (черновик сохранится)') +
       '<h4>Инструменты</h4>' +
-      (['rect', 'arrow', 'ellipse', 'draw', 'crop', 'text', 'eraser'] as Tool[]).map((t) => row(keyFor(t), TOOL_LABELS[t])).join('') +
-      row(widthKeys, 'толщина') + row('F / Shift + F', 'следующий / прошлый цвет') +
+      TOOL_ORDER.map((t) => row(toolKey(layout, t), TOOL_LABELS[t])).join('') +
+      row(widthKeys(layout), 'толщина: тонко / средне / толсто') + row('F / Shift + F', 'следующий / прошлый цвет') +
       '<h4>Пока курсор в поле текста</h4><div>буквы и пробел — только в поле; работают Ctrl + Enter и Esc</div>'
   }
   q<HTMLElement>('.kbtn').addEventListener('click', (e) => { e.stopPropagation(); kpop.classList.toggle('on') })
@@ -1366,29 +1299,24 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
   lytBtn.addEventListener('click', (e) => { e.stopPropagation(); lytPop.classList.toggle('on') })
   root.querySelectorAll('.lyto').forEach((el) =>
     el.addEventListener('click', () => {
-      setLayout((el as HTMLElement).dataset.lyt as 'designer' | 'gamer')
+      setLayout((el as HTMLElement).dataset.lyt as Layout)
       lytPop.classList.remove('on')
     }),
   )
   root.addEventListener('click', (e) => { if (!(e.target as HTMLElement).closest?.('.lyt')) lytPop.classList.remove('on') })
   syncLayoutUI()
+  // A tester who picked a layout in an older build has it in THIS site's localStorage (the choice used to be
+  // per site); it is carried over once so their pick survives the move to the extension-wide store.
+  void loadLayout().then(async (stored) => {
+    const legacy = localStorage.getItem(LAYOUT_STORE_KEY)
+    const has = (await chrome.storage.local.get(LAYOUT_STORE_KEY))[LAYOUT_STORE_KEY]
+    const l = !has && isLayout(legacy) ? legacy : stored
+    if (!has && isLayout(legacy)) await saveLayout(legacy)
+    if (l !== layout) { layout = l; syncLayoutUI() }
+  }).catch(() => {})
+  onLayoutChange((l) => { if (l !== layout) { layout = l; syncLayoutUI() } })
   root.querySelectorAll('.tb.tool').forEach((el) =>
     el.addEventListener('click', () => ann.setTool((el as HTMLElement).dataset.tool as Tool)),
-  )
-  root.querySelectorAll('.seg.type button').forEach((el) =>
-    el.addEventListener('click', () => {
-      type = (el as HTMLElement).dataset.v as ReportType
-      root.querySelectorAll('.seg.type button').forEach((b) => b.classList.toggle('on', b === el))
-      syncTitle()
-      persist()
-    }),
-  )
-  root.querySelectorAll('.seg.sev button').forEach((el) =>
-    el.addEventListener('click', () => {
-      severity = (el as HTMLElement).dataset.v as Severity
-      root.querySelectorAll('.seg.sev button').forEach((b) => b.classList.toggle('on', b === el))
-      persist()
-    }),
   )
   root.querySelectorAll('.tinsz button').forEach((el) => {
     el.addEventListener('mousedown', (e) => e.preventDefault()) // keep the text input focused when picking a size
@@ -1571,49 +1499,6 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
     document.addEventListener('keydown', onBarKey, true)
     ;(broot.querySelector('.stop') as HTMLElement).addEventListener('click', () => { void stop() })
   }
-
-  // Populate the project picker from the account's projects (fetched via background → collector), preselecting
-  // the ingest key's own project. Choosing another routes the report there on send.
-  const esc = (s: string) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
-  // The addressee list belongs to the board the ticket goes to, so it is rebuilt from the same answer whenever
-  // the project changes. A choice the new board cannot honour is dropped here rather than sent and refused.
-  function renderAssignees(): void {
-    const agents = assignableOn(projects, projectId)
-    assignee = keepAssignee(assignee, agents)
-    asel.innerHTML = assigneeOptionsHtml(agents, assignee, projectsLoaded, onBoardHandles(projects, projectId))
-    asel.disabled = !agents.length
-  }
-
-  getConfig()
-    .then(async (cfg) => {
-      const res = (await chrome.runtime.sendMessage({ type: 'TH_PROJECTS', collectorUrl: cfg.collectorUrl, ingestKey: cfg.ingestKey })) as ProjectsAnswer
-      if (!res?.ok || !Array.isArray(res.projects) || !res.projects.length) return
-      projects = res
-      projectsLoaded = true
-      // Preference order: the restored draft's own choice (the tester already decided where this report goes)
-      // → the project used last (if it still exists) → the ingest key's own → the first one.
-      const fromDraft = projectId && res.projects.some((p) => p.id === projectId) ? projectId : ''
-      const remembered = res.projects.some((p) => p.id === cfg.lastProjectId) ? cfg.lastProjectId : ''
-      projectId = fromDraft || remembered || res.defaultId || res.projects[0]!.id
-      psel.innerHTML = res.projects.map((p) => `<option value="${esc(p.id)}"${p.id === projectId ? ' selected' : ''}>${esc(p.name)}</option>`).join('')
-    })
-    .catch(() => {})
-    // Runs on every outcome, including the failures above: a picker that quietly kept showing "никому" would
-    // hide the fact that the roster was never asked for, and the reporter would think he had chosen it.
-    .finally(() => renderAssignees())
-  psel.addEventListener('change', () => {
-    projectId = psel.value || null
-    if (projectId) void setConfig({ lastProjectId: projectId }) // remembered for the next report
-    renderAssignees()
-    persist()
-  })
-  asel.addEventListener('change', () => {
-    // Deliberately NOT remembered like lastProjectId: the next capture starts unaddressed, because "nobody" is
-    // the honest default for a fresh bug and a sticky addressee would quietly hand the next one to whoever
-    // happened to take the last.
-    assignee = asel.value || null
-    persist()
-  })
 
   function setMsg(t: string, cls = '') { msg.textContent = t; msg.className = 'msg ' + cls; msg.title = '' }
 

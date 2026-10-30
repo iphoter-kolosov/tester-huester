@@ -30,7 +30,7 @@
          the only thing that flexes, so nothing is ever pushed out of reach at 1366x768 or 1024x600. */
       .body { display: flex; gap: 10px; flex: 1 1 auto; min-height: 0; }
       .rail { flex: 0 0 264px; width: 264px; display: flex; flex-direction: column; gap: 7px; min-height: 0; }
-      .railscroll { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 9px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; padding-right: 3px; }
+      .railscroll { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; gap: 9px; overflow-y: auto; overflow-x: hidden; scrollbar-width: thin; padding-right: 3px; }
       .railscroll::-webkit-scrollbar { width: 6px; }
       .railscroll::-webkit-scrollbar-thumb { background: #2b3a55; border-radius: 3px; }
       .railfoot { flex: 0 0 auto; display: flex; flex-direction: column; gap: 6px; padding-top: 7px; border-top: 1px solid #223049; }
@@ -81,18 +81,6 @@
       .wknob { position: absolute; top: 50%; width: 16px; height: 16px; margin: -8px 0 0 -8px; border-radius: 50%; background: #0a84ff; border: 2px solid #fff; box-shadow: 0 0 0 1px #0f1626, 0 2px 6px rgba(0,0,0,.6); pointer-events: none; transition: left .06s linear; }
       .wtags { display: flex; justify-content: space-between; padding: 0 2px; font-size: 9.5px; font-weight: 700; color: #8ea0bd; }
 
-      .seg { display: grid; grid-template-columns: 1fr 1fr; border: 1px solid #223049; border-radius: 8px; overflow: hidden; }
-      .seg.sev { grid-template-columns: repeat(4, 1fr); }
-      .seg button { height: 28px; padding: 0 4px; border: 0; border-right: 1px solid #223049; border-bottom: 1px solid #223049; background: #0f1626; color: #e6edf7; font-size: 11.5px; font-weight: 700; cursor: pointer; }
-      .seg button.on { background: #0a84ff; color: #fff; }
-      .seg.sev button.on[data-v="low"] { background: #3f6212; }
-      .seg.sev button.on[data-v="med"] { background: #a16207; }
-      .seg.sev button.on[data-v="high"] { background: #c2410c; }
-      .seg.sev button.on[data-v="crit"] { background: #b91c1c; }
-      .psel, .asel { width: 100%; height: 30px; padding: 0 9px; border: 1px solid #223049; background: #0f1626; color: #e6edf7; border-radius: 8px; font-size: 12.5px; font-weight: 700; cursor: pointer; }
-      .psel:hover, .asel:not(:disabled):hover { border-color: #38bdf8; }
-      /* disabled = nobody to address on this board, or the roster never arrived; the option text says which */
-      .asel:disabled { color: #8ea0bd; cursor: default; font-weight: 600; }
 
       /* video block */
       .vid { display: flex; flex-direction: column; gap: 6px; padding: 8px 9px; border: 1px solid #223049; border-radius: 10px; background: #0f1626; }
@@ -200,7 +188,7 @@
             </div>
 
             <div class="grp">
-              <span class="grpttl">Инструмент <span class="grpkey">R A O P C T E</span></span>
+              <span class="grpttl">Инструмент <span class="grpkey tkeys"></span></span>
               <span class="rowx tools"></span>
             </div>
 
@@ -210,31 +198,9 @@
             </div>
 
             <div class="grp">
-              <span class="grpttl">Размер <span class="grpkey">(1 / 2 / 3)</span></span>
+              <span class="grpttl">Размер <span class="grpkey wkeys"></span></span>
               <div class="wbar" role="slider" aria-label="Толщина"><span class="wwedge"></span><span class="wknob"></span></div>
               <div class="wtags"><span>тонко</span><span>средне</span><span>толсто</span></div>
-            </div>
-
-            <div class="grp">
-              <span class="grpttl">Тип</span>
-              <div class="seg type"></div>
-            </div>
-
-            <div class="grp">
-              <span class="grpttl">Важность</span>
-              <div class="seg sev"></div>
-            </div>
-
-            <div class="grp">
-              <span class="grpttl">Проект</span>
-              <select class="psel"><option value="">по умолчанию</option></select>
-            </div>
-
-            <div class="grp">
-              <span class="grpttl">Исполнитель</span>
-              <!-- Filled from the same /api/projects answer as the board above; disabled until it arrives, so an
-                   empty list never looks like a broken control. -->
-              <select class="asel" disabled><option value="">— Хуестеру (сам разведёт)</option></select>
             </div>
 
             <div class="grp">

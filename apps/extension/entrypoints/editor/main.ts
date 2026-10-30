@@ -10,14 +10,14 @@
 // through a crash) leaves the draft exactly where it was.
 import { ImageAnnotator, DEFAULT_COLORS } from '@th/core'
 import type { Prim, ReproBundle, Tool, Width } from '@th/core'
-import { getConfig, setConfig } from '@/lib/config'
+import { getConfig } from '@/lib/config'
 import { buildReport, type ReportType, type Severity } from '@/lib/report'
 import {
   loadDraft, saveDraft, flushDrafts, clearDraft, hasContent,
   type Draft, type DraftAttachment, type DraftVideo,
 } from '@/lib/draft'
 import { ICON_RECT, ICON_ARROW, ICON_ELLIPSE, ICON_PENCIL, ICON_CROP, ICON_TEXT, ICON_ERASER, TOOL_CURSORS, TOOL_LABELS } from '@/lib/glyphs'
-import { assignableOn, assigneeOptionsHtml, keepAssignee, onBoardHandles, type ProjectsAnswer } from '@/lib/roster'
+import { LAYOUT_LABELS, REDO_CODES, TOOL_LAYOUTS, UNDO_CODES, WIDTH_LAYOUTS, loadLayout, onLayoutChange, toolKey, toolKeysShort, widthKeys, type Layout } from '@/lib/layout'
 
 // The collector stores at most this many attachments per report (MAX_ATTACHMENTS in @th/db). Refusing the
 // eleventh here, out loud, beats letting the tester annotate one the server would silently drop.
@@ -48,7 +48,6 @@ const TYPES: { value: ReportType; label: string; icon: string }[] = [
   { value: 'fix', label: 'Правка', icon: '✏️' },
   { value: 'text', label: 'Текст', icon: '📝' },
 ]
-const SEVERITIES: Severity[] = ['low', 'med', 'high', 'crit']
 const TOOL_ICONS: { tool: Tool; icon: string }[] = [
   { tool: 'rect', icon: ICON_RECT },
   { tool: 'arrow', icon: ICON_ARROW },
@@ -58,10 +57,9 @@ const TOOL_ICONS: { tool: Tool; icon: string }[] = [
   { tool: 'text', icon: ICON_TEXT },
   { tool: 'eraser', icon: ICON_ERASER },
 ]
-// Mnemonic letters keyed off e.code (the PHYSICAL key), so they work under any keyboard layout — the same
-// "designer" mapping the overlay ships, mirrored here so muscle memory carries across the two surfaces.
-const TOOL_CODES: Record<string, Tool> = { KeyR: 'rect', KeyA: 'arrow', KeyO: 'ellipse', KeyP: 'draw', KeyC: 'crop', KeyT: 'text', KeyE: 'eraser' }
-const WIDTH_CODES: Record<string, Width> = { Digit1: 'thin', Digit2: 'med', Digit3: 'thick', Numpad1: 'thin', Numpad2: 'med', Numpad3: 'thick' }
+// The hotkey layout the tester chose in the overlay (lib/layout.ts) — one choice for both surfaces, so muscle
+// memory carries across. Switched in the overlay; this window follows it live.
+let layout: Layout = 'gamer'
 
 const q = <T extends Element>(s: string): T => document.querySelector(s) as T
 const canvas = q<HTMLCanvasElement>('.canvas')
@@ -79,10 +77,6 @@ const recSt = q<HTMLElement>('.recst')
 const restBar = q<HTMLElement>('.rest')
 const restT = q<HTMLElement>('.restt')
 const toolsRow = q<HTMLElement>('.tools')
-const typeSeg = q<HTMLElement>('.seg.type')
-const sevSeg = q<HTMLElement>('.seg.sev')
-const psel = q<HTMLSelectElement>('.psel')
-const asel = q<HTMLSelectElement>('.asel')
 const recBtn = q<HTMLButtonElement>('.rec')
 const vdropBtn = q<HTMLButtonElement>('.vdrop')
 const vidSt = q<HTMLElement>('.vidst')
@@ -107,14 +101,12 @@ let pageUrl = params.get('url') ?? ''
 let items: Item[] = [{ id: 'main', base: '', prims: [], caption: '' }]
 let sel = 0
 let activeDims = '' // canvas size of the selected item — the only outside signal that a crop replaced its base
-let type: ReportType = 'bug'
-let severity: Severity = 'med'
-let projectId: string | null = null
-// Whom the ticket is FOR; null — nobody, which stays the default here exactly as it is in the page overlay.
-let assignee: string | null = null
-// The roster answer, kept so switching the board rebuilds the addressee list without another request.
-let projects: ProjectsAnswer = {}
-let projectsLoaded = false
+// Not asked for any more: Хуестер on the hub files the ticket on the right board for the right agent (see the
+// overlay). Fields an older draft carries are ignored rather than shown nowhere and sent anyway.
+const type: ReportType = 'bug'
+const severity: Severity = 'med'
+const projectId: string | null = null
+const assignee: string | null = null
 let video: DraftVideo | null = null
 let context: ReproBundle | null = null
 // True while an item is being put on screen: the annotator fires onChange during that, and autosaving
@@ -130,9 +122,9 @@ let pendingText: { x: number; y: number } | null = null
 let markBooted: () => void = () => {}
 const booted: Promise<void> = new Promise<void>((r) => { markBooted = r })
 
+const esc = (s: string): string => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
 const uid = (): string => 'a' + Math.random().toString(36).slice(2, 9) + Date.now().toString(36).slice(-4)
 const fmtT = (s: number): string => `${Math.floor(s / 60)}:${String(Math.floor(s % 60)).padStart(2, '0')}`
-const esc = (s: string): string => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] as string))
 const plural = (n: number, one: string, few: string, many: string): string => {
   const m10 = n % 10
   const m100 = n % 100
@@ -508,8 +500,7 @@ document.querySelectorAll('.tinsz button').forEach((el) => {
 // ── toolbar ──────────────────────────────────────────────────────────────────────────────────────────────
 toolsRow.innerHTML =
   TOOL_ICONS.map(({ tool, icon }) => {
-    const key = Object.entries(TOOL_CODES).find(([, v]) => v === tool)?.[0]?.replace(/^Key/, '') ?? '—'
-    return `<button class="tb tool${tool === 'rect' ? ' on' : ''}" data-tool="${tool}" title="${TOOL_LABELS[tool]} · ${key}">${icon}</button>`
+    return `<button class="tb tool${tool === 'rect' ? ' on' : ''}" data-tool="${tool}" title="${TOOL_LABELS[tool]}">${icon}</button>`
   }).join('') +
   '<button class="tb" data-act="undo" disabled title="Отменить · Ctrl+Z">↩</button>' +
   '<button class="tb" data-act="redo" disabled title="Повторить · Ctrl+Y">↪</button>' +
@@ -570,48 +561,27 @@ bindSlider(wbar, (x) => {
 pickColor(DEFAULT_COLORS[0]!)
 pickWidth('med')
 
-// ── taxonomy ─────────────────────────────────────────────────────────────────────────────────────────────
-typeSeg.innerHTML = TYPES.map((t) => `<button data-v="${t.value}">${t.icon} ${t.label}</button>`).join('')
-sevSeg.innerHTML = SEVERITIES.map((s) => `<button data-v="${s}">${s}</button>`).join('')
-function syncTypeSev(): void {
-  typeSeg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === type))
-  sevSeg.querySelectorAll('button').forEach((b) => b.classList.toggle('on', b.dataset.v === severity))
+// ── hotkey captions ──────────────────────────────────────────────────────────────────────────────────────
+// Every place that names a key is rewritten from the current layout, so none of them teaches an unbound key.
+function syncLayoutUI(): void {
+  toolsRow.querySelectorAll<HTMLElement>('.tool').forEach((b) => {
+    const t = b.dataset.tool as Tool
+    b.title = `${TOOL_LABELS[t]} · ${toolKey(layout, t)}`
+  })
+  const undoK = UNDO_CODES[layout].map((c) => c.replace(/^Key/, ''))
+  const redoK = REDO_CODES[layout].map((c) => c.replace(/^Key/, ''))
+  undoBtn.title = `Отменить · ${[...undoK, 'Ctrl+Z'].join(' или ')}`
+  redoBtn.title = `Вернуть · ${[...redoK, 'Ctrl+Y'].join(' или ')}`
+  q<HTMLElement>('.tkeys').textContent = `${LAYOUT_LABELS[layout]}: ${toolKeysShort(layout)}`
+  q<HTMLElement>('.wkeys').textContent = `(${widthKeys(layout)})`
+}
+syncLayoutUI()
+void loadLayout().then((l) => { layout = l; syncLayoutUI() }).catch(() => {})
+onLayoutChange((l) => { layout = l; syncLayoutUI() })
+
+const syncTitle = (): void => {
   const t = TYPES.find((x) => x.value === type)!
   titleEl.textContent = `${t.icon} ${t.label} — редактор`
-}
-typeSeg.addEventListener('click', (e) => {
-  const v = (e.target as HTMLElement).closest('button')?.dataset.v as ReportType | undefined
-  if (!v) return
-  type = v
-  syncTypeSev()
-  persist()
-})
-sevSeg.addEventListener('click', (e) => {
-  const v = (e.target as HTMLElement).closest('button')?.dataset.v as Severity | undefined
-  if (!v) return
-  severity = v
-  syncTypeSev()
-  persist()
-})
-psel.addEventListener('change', () => {
-  projectId = psel.value || null
-  if (projectId) void setConfig({ lastProjectId: projectId }) // remembered for the next report
-  renderAssignees()
-  persist()
-})
-asel.addEventListener('change', () => {
-  // Not remembered the way lastProjectId is: the next capture starts unaddressed on purpose (see the overlay).
-  assignee = asel.value || null
-  persist()
-})
-
-// The addressee belongs to the board the ticket goes to, so the list is rebuilt whenever that board changes,
-// and a choice the new board cannot honour is dropped here rather than sent and refused.
-function renderAssignees(): void {
-  const agents = assignableOn(projects, projectId)
-  assignee = keepAssignee(assignee, agents)
-  asel.innerHTML = assigneeOptionsHtml(agents, assignee, projectsLoaded, onBoardHandles(projects, projectId))
-  asel.disabled = !agents.length
 }
 
 note.addEventListener('input', () => persist({}, false)) // typing is the one change frequent enough to debounce
@@ -822,10 +792,12 @@ document.addEventListener('keydown', (e) => {
   if (mod) return // Ctrl+V and every other browser combo belongs to the browser
 
   if (typing) return
+  if (UNDO_CODES[layout].includes(code)) { e.preventDefault(); ann.undo(); return }
+  if (REDO_CODES[layout].includes(code)) { e.preventDefault(); ann.redo(); return }
   if (e.shiftKey && (code === 'Delete' || code === 'Backspace')) { e.preventDefault(); ann.clearAll(); return }
-  const tool = TOOL_CODES[code]
+  const tool = TOOL_LAYOUTS[layout][code]
   if (tool) { e.preventDefault(); ann.setTool(tool); return }
-  const w = WIDTH_CODES[code]
+  const w = WIDTH_LAYOUTS[layout][code]
   if (w) { e.preventDefault(); pickWidth(w); return }
   if (code === 'KeyF') {
     e.preventDefault()
@@ -1002,26 +974,6 @@ async function readSeed(): Promise<Seed | null> {
   return seed
 }
 
-async function loadProjects(): Promise<void> {
-  const cfg = await getConfig()
-  const res = await ask<ProjectsAnswer>({
-    type: 'TH_PROJECTS',
-    collectorUrl: cfg.collectorUrl,
-    ingestKey: cfg.ingestKey,
-  })
-  // A picker that quietly kept showing "никому" would hide the fact that the roster was never asked for, and
-  // the reporter would think he had chosen it — so the addressee list is rendered on this path too.
-  if (!res?.ok || !res.projects?.length) { renderAssignees(); return }
-  projects = res
-  projectsLoaded = true
-  // Preference order: the draft's own choice → the project used last → the ingest key's own → the first.
-  const fromDraft = projectId && res.projects.some((p) => p.id === projectId) ? projectId : ''
-  const remembered = res.projects.some((p) => p.id === cfg.lastProjectId) ? cfg.lastProjectId : ''
-  projectId = fromDraft || remembered || res.defaultId || res.projects[0]!.id
-  psel.innerHTML = res.projects.map((p) => `<option value="${esc(p.id)}"${p.id === projectId ? ' selected' : ''}>${esc(p.name)}</option>`).join('')
-  renderAssignees()
-}
-
 function showRestored(d: Draft): void {
   const bits: string[] = []
   if (d.prims.length) bits.push(`<b>${d.prims.length}</b> ${plural(d.prims.length, 'пометка', 'пометки', 'пометок')}`)
@@ -1051,7 +1003,7 @@ async function consumeSeed(seed: Seed | null): Promise<void> {
 
 async function boot(): Promise<void> {
   targetEl.textContent = pageUrl
-  syncTypeSev()
+  syncTitle()
   renderVideo()
 
   if (!origin) {
@@ -1067,10 +1019,6 @@ async function boot(): Promise<void> {
 
   if (draft) {
     note.value = draft.note
-    type = draft.type
-    severity = draft.severity
-    projectId = draft.projectId
-    assignee = draft.assignee
     video = draft.video
     context = (draft.context as ReproBundle | null) ?? null
     if (draft.pageUrl && !pageUrl) pageUrl = draft.pageUrl
@@ -1090,7 +1038,7 @@ async function boot(): Promise<void> {
   }
 
   targetEl.textContent = pageUrl
-  syncTypeSev()
+  syncTitle()
   renderVideo()
   renderCtxHint()
   await select(0)
@@ -1102,7 +1050,6 @@ async function boot(): Promise<void> {
   if (seed && !seedIsMain) await consumeSeed(seed)
   else if (!restored) persist() // a capture is worth keeping from its first second, not from the first edit
 
-  void loadProjects()
   if (!context) void refreshContext()
   note.focus()
 }
