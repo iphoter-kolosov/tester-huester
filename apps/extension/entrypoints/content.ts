@@ -302,6 +302,11 @@ const CSS = `
 /* a server refusal: keep its line breaks (the roster is a list) and cap the height so it cannot push the
    Send button out of the panel */
 .msg.long { white-space: pre-line; max-height: 130px; overflow-y: auto; }
+.kbtn { width: 26px; height: 26px; border-radius: 50%; border: 1px solid #2b3a55; background: #0f1626; color: #e6edf7; font-weight: 800; cursor: pointer; }
+.kpop { display: none; position: absolute; z-index: 15; top: 48px; right: 12px; width: min(360px, 90vw); padding: 12px 14px; background: #131a2b; border: 1px solid #2b3a55; border-radius: 12px; box-shadow: 0 14px 34px rgba(0,0,0,.6); font-size: 12.5px; line-height: 1.5; }
+.kpop.on { display: block; }
+.kpop b { color: #38bdf8; display: inline-block; min-width: 104px; }
+.kpop h4 { margin: 8px 0 4px; font-size: 12px; color: #8ea0bd; }
 .ver { font-size: 11px; color: #64748b; font-weight: 600; }
 .upd { display: none; font-size: 11.5px; font-weight: 800; color: #0b1220; background: #fbbf24; border-radius: 999px; padding: 3px 10px; text-decoration: none; white-space: normal; }
 .upd.on { display: inline-block; }
@@ -425,7 +430,8 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
     <div class="scrim" part="scrim">
       <div class="card">
         <div class="rest"><span class="restt"></span><button class="restx">Начать заново</button></div>
-        <div class="head"><span class="title"></span><span class="ver"></span><a class="upd" target="_blank" rel="noopener"></a><span class="recst"></span><span class="ctxhint"></span><button class="x" title="Close">✕</button></div>
+        <div class="head"><span class="title"></span><span class="ver"></span><a class="upd" target="_blank" rel="noopener"></a><span class="recst"></span><span class="ctxhint"></span><button class="kbtn" title="Горячие клавиши · ?">?</button><button class="x" title="Close">✕</button></div>
+        <div class="kpop"></div>
         <div class="body">
           <div class="side">
             <div class="sidescroll">
@@ -751,6 +757,7 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
     if (REDO_KEYS().includes(code)) { e.preventDefault(); ann.redo(); return }
 
     if (e.shiftKey && (code === 'Delete' || code === 'Backspace')) { e.preventDefault(); ann.clearAll(); return }
+    if (code === 'Slash' && e.shiftKey) { e.preventDefault(); kpop.classList.toggle('on'); return } // "?" — cheat sheet
     const tool = TOOL_CODES[code]
     if (tool) { e.preventDefault(); ann.setTool(tool); refresh(); return }
     const w = WIDTH_CODES[code]
@@ -1335,7 +1342,27 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
       const t = (el as HTMLElement).dataset.tool as Tool
       ;(el as HTMLElement).title = `${TOOL_LABELS[t]} · ${keyFor(t)}`
     })
+    renderKeys(keyFor)
   }
+  // The cheat sheet follows the CURRENT layout, so it never teaches a key that is not bound.
+  const kpop = q<HTMLElement>('.kpop')
+  function renderKeys(keyFor: (t: Tool) => string): void {
+    const row = (k: string, what: string) => `<div><b>${k}</b>${what}</div>`
+    const widthKeys = Object.entries(WIDTH_CODES).filter(([c]) => !c.startsWith('Numpad')).map(([c]) => c.replace(/^Key|^Digit/, '')).join(' / ')
+    kpop.innerHTML =
+      '<h4>Отправка и правка</h4>' +
+      row('Ctrl + Enter', 'отправить') +
+      row('Ctrl + Z', 'отменить') + row('Ctrl + Y', 'вернуть') +
+      (layout === 'gamer' ? row('Q / R', 'отменить / вернуть') : '') +
+      row('Shift + Del', 'стереть все пометки') +
+      row('Esc', 'закрыть (черновик сохранится)') +
+      '<h4>Инструменты</h4>' +
+      (['rect', 'arrow', 'ellipse', 'draw', 'crop', 'text', 'eraser'] as Tool[]).map((t) => row(keyFor(t), TOOL_LABELS[t])).join('') +
+      row(widthKeys, 'толщина') + row('F / Shift + F', 'следующий / прошлый цвет') +
+      '<h4>Пока курсор в поле текста</h4><div>буквы и пробел — только в поле; работают Ctrl + Enter и Esc</div>'
+  }
+  q<HTMLElement>('.kbtn').addEventListener('click', (e) => { e.stopPropagation(); kpop.classList.toggle('on') })
+  root.addEventListener('click', (e) => { if (!(e.target as HTMLElement).closest?.('.kpop, .kbtn')) kpop.classList.remove('on') })
   lytBtn.addEventListener('click', (e) => { e.stopPropagation(); lytPop.classList.toggle('on') })
   root.querySelectorAll('.lyto').forEach((el) =>
     el.addEventListener('click', () => {

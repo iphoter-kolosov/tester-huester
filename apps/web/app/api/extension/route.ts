@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import path from 'node:path'
 import { NextResponse } from 'next/server'
+import { collectorBase } from '@/lib/collector'
 
 export const dynamic = 'force-dynamic'
 
@@ -27,7 +28,8 @@ export async function GET(req: Request) {
     console.error('[api/extension] latest.json unreadable', e)
     return NextResponse.json({ ok: false, error: 'no_release' }, { status: 404, headers: CORS })
   }
-  const origin = new URL(req.url).origin
+  // Not new URL(req.url).origin: behind the proxy that is the loopback the process listens on (lib/collector.ts).
+  const origin = collectorBase(req.headers)
   return NextResponse.json(
     { ok: true, version: latest.version, url: `${origin}/extension/${latest.file}`, notes: latest.notes, releasedAt: latest.releasedAt },
     { headers: { ...CORS, 'Cache-Control': 'no-store' } },
