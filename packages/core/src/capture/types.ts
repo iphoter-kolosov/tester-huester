@@ -48,4 +48,7 @@ export type ReproBundle = {
   network: NetworkEntry[]
   actions: ActionStep[]
   capturedAt: number
+  // What each mark on the screenshot points at on the live page (see marks.ts). Absent on older reports and
+  // when the backdrop is not the live page any more (a restored draft, a cropped frame, a scrolled page).
+  marks?: import('./marks.js').MarkedElement[]
 }

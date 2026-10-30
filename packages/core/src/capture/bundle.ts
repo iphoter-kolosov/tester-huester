@@ -4,6 +4,8 @@ import type { ConsoleEntry, NetworkEntry, ActionStep, EnvInfo, ReproBundle } fro
 // Re-exported so Node consumers (MCP) can pull the pure repro helpers + types WITHOUT loading the
 // annotator / @medv/finder (which the main '.' entry pulls in). Import from '@th/core/repro'.
 export type { ReproBundle, ConsoleEntry, NetworkEntry, ActionStep, EnvInfo, SelectorCandidates } from './types.js'
+export { describeMarks } from './marks'
+export type { MarkedElement } from './marks.js'
 
 // Caps so one long-lived tab can't produce a multi-megabyte payload. The rings are already bounded; this
 // is the final belt-and-suspenders trim at assembly time.

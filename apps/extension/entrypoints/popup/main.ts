@@ -1,11 +1,23 @@
 import { getConfig, setConfig, DEFAULTS } from '@/lib/config'
+import { newerRelease } from '@/lib/update'
 
 const url = document.getElementById('url') as HTMLInputElement
 const key = document.getElementById('key') as HTMLInputElement
 const replay = document.getElementById('replay') as HTMLInputElement
 const hint = document.getElementById('hint') as HTMLElement
 
+const myVersion = chrome.runtime.getManifest().version
+document.getElementById('ver')!.textContent = 'v' + myVersion
+
 getConfig().then((c) => {
+  void newerRelease(c.collectorUrl, myVersion).then((rel) => {
+    if (!rel) return
+    const a = document.getElementById('upd') as HTMLAnchorElement
+    a.href = rel.url
+    a.textContent = `⬆ Новая версия ${rel.version} — скачать`
+    a.title = rel.notes.join('\n')
+    a.style.display = 'block'
+  })
   url.value = c.collectorUrl
   key.value = c.ingestKey
   replay.checked = c.recordReplay

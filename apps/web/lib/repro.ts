@@ -1,5 +1,5 @@
 import type { Report } from '@th/db'
-import { reproSteps, type ReproBundle } from '@th/core/repro'
+import { reproSteps, describeMarks, type ReproBundle } from '@th/core/repro'
 
 // The single source of truth for turning a stored report into an agent-ready reproduction. Both the REST
 // read-API (`GET /api/reports/[id]/repro`) and the MCP `get_repro_steps` tool call this so they never drift.
@@ -29,6 +29,9 @@ export type ReproResult =
       report: { id: string; note: string; pageUrl: string | null; status: string; type: string; severity: string | null }
       visual: ReproVisual
       environment: ReproBundle['env']
+      // What each mark the reporter drew points at on the page: "Mark 2 (frame) → button "Купить" · css: …".
+      // Read together with the screenshot — the numbers follow the drawing order.
+      pointedElements: string[]
       steps: string[]
       consoleErrors: string[]
       failedRequests: string[]
@@ -91,6 +94,7 @@ export function buildRepro(r: Report): ReproResult {
     report: { id: r.id, note: r.note, pageUrl: r.pageUrl, status: r.status, type: r.type, severity: r.severity },
     visual,
     environment: ctx.env,
+    pointedElements: Array.isArray(ctx.marks) ? describeMarks(ctx.marks) : [],
     steps: steps.length ? steps : ['(no user actions were recorded)'],
     consoleErrors: errors.map((e) => e.text),
     failedRequests: failed.map((n) => `${n.method} ${n.url} → ${n.status || 'ERR'} (${n.ms}ms)`),

@@ -5,6 +5,8 @@ export type { Point, Width, Tool, Prim, Freehand, Arrow, RectPrim, TextPrim, Str
 export { Ring } from './capture/ring'
 export { captureEnv } from './capture/env'
 export { bestSelector } from './capture/selector'
+export { markElements, describeMarks, pickElement } from './capture/marks'
+export type { MarkedElement, Candidate as MarkCandidate } from './capture/marks'
 export { patchConsole, formatArgs } from './capture/console-buffer'
 export { wrapFetchXhr } from './capture/network-buffer'
 export { ActionRecorder, toStep } from './capture/actions'

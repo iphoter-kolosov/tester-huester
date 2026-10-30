@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import type { ReproBundle, ActionStep, ConsoleEntry, NetworkEntry } from '@th/core'
+import type { ReproBundle, ActionStep, ConsoleEntry, NetworkEntry, MarkedElement } from '@th/core'
 
 // The repro bundle rendered as tabs. This is the human half of "one capture, two consumers" — the same
 // JSON an AI agent reads over MCP. Kept dependency-light: type-only import from @th/core (erased at build),
@@ -11,7 +11,9 @@ export default function ReproContext({ context }: { context: ReproBundle & { dia
   const cons = context.console ?? []
   const net = context.network ?? []
   const diag = context.diag
+  const marks = context.marks ?? []
   const tabs = [
+    { key: 'marks', label: 'Пометки', n: marks.length },
     { key: 'steps', label: 'Шаги', n: actions.length },
     { key: 'console', label: 'Консоль', n: cons.length },
     { key: 'network', label: 'Сеть', n: net.length },
@@ -37,6 +39,7 @@ export default function ReproContext({ context }: { context: ReproBundle & { dia
         ))}
       </div>
       <div className="ctxbody">
+        {tab === 'marks' && <Marks marks={marks} />}
         {tab === 'steps' && <Steps actions={actions} />}
         {tab === 'console' && <ConsoleView rows={cons} />}
         {tab === 'network' && <NetworkView rows={net} />}
@@ -44,6 +47,27 @@ export default function ReproContext({ context }: { context: ReproBundle & { dia
         {tab === 'diag' && <DiagView diag={diag!} />}
       </div>
     </div>
+  )
+}
+
+// Each mark on the screenshot and the page element it was drawn over, numbered in drawing order.
+const MARK_NAMES: Record<MarkedElement['mark'], string> = { rect: 'рамка', ellipse: 'овал', arrow: 'стрелка', freehand: 'от руки', text: 'надпись' }
+function Marks({ marks }: { marks: MarkedElement[] }) {
+  return (
+    <ol className="steps">
+      {marks.map((m) => {
+        const s = m.selector
+        const what = s.role && s.name ? `${s.role} «${s.name}»` : s.text ? `<${m.tag}> «${s.text}»` : `<${m.tag}>`
+        return (
+          <li key={m.n}>
+            <span className="stept">
+              <span style={{ color: m.color }}>●</span> {MARK_NAMES[m.mark]}{m.label ? ` «${m.label}»` : ''} → {what}
+            </span>
+            <code className="stepsel">{s.css}</code>
+          </li>
+        )
+      })}
+    </ol>
   )
 }
 

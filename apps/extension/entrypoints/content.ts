@@ -1,9 +1,10 @@
-import { ImageAnnotator, DEFAULT_COLORS } from '@th/core'
-import type { Prim, ReproBundle, Tool, Width } from '@th/core'
+import { ImageAnnotator, DEFAULT_COLORS, bestSelector, markElements } from '@th/core'
+import type { MarkCandidate, MarkedElement, Prim, ReproBundle, Tool, Width } from '@th/core'
 import { getConfig, setConfig } from '@/lib/config'
 import { buildReport, type ReportType, type Severity } from '@/lib/report'
 import { requestBundle } from '@/lib/bridge'
 import { isolateKeys } from '@/lib/keys'
+import { newerRelease } from '@/lib/update'
 import { loadDraft, saveDraft, flushDrafts, clearDraft, hasContent, type Draft, type DraftVideo } from '@/lib/draft'
 import { assignableOn, assigneeOptionsHtml, keepAssignee, onBoardHandles, ASSIGNEE_NOBODY_LABEL, type ProjectsAnswer } from '@/lib/roster'
 import { ICON_RECT, ICON_ARROW, ICON_ELLIPSE, ICON_PENCIL, ICON_CROP, ICON_TEXT, ICON_ERASER, TOOL_CURSORS, TOOL_LABELS } from '@/lib/glyphs'
@@ -301,6 +302,9 @@ const CSS = `
 /* a server refusal: keep its line breaks (the roster is a list) and cap the height so it cannot push the
    Send button out of the panel */
 .msg.long { white-space: pre-line; max-height: 130px; overflow-y: auto; }
+.ver { font-size: 11px; color: #64748b; font-weight: 600; }
+.upd { display: none; font-size: 11.5px; font-weight: 800; color: #0b1220; background: #fbbf24; border-radius: 999px; padding: 3px 10px; text-decoration: none; white-space: normal; }
+.upd.on { display: inline-block; }
 .ctxhint { margin-left: auto; font-size: 11.5px; font-weight: 700; color: #8ea0bd; display: flex; gap: 6px; align-items: center; }
 .ctxhint b { color: #38bdf8; font-weight: 800; }
 .ctxhint .e { color: #fda4af; }
@@ -421,7 +425,7 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
     <div class="scrim" part="scrim">
       <div class="card">
         <div class="rest"><span class="restt"></span><button class="restx">Начать заново</button></div>
-        <div class="head"><span class="title"></span><span class="recst"></span><span class="ctxhint"></span><button class="x" title="Close">✕</button></div>
+        <div class="head"><span class="title"></span><span class="ver"></span><a class="upd" target="_blank" rel="noopener"></a><span class="recst"></span><span class="ctxhint"></span><button class="x" title="Close">✕</button></div>
         <div class="body">
           <div class="side">
             <div class="sidescroll">
@@ -554,6 +558,19 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
   const note = q<HTMLTextAreaElement>('.note')
   const msg = q<HTMLElement>('.msg')
   const titleEl = q<HTMLElement>('.title')
+
+  // Which build this is, and whether the board has a newer one — the tester cannot otherwise tell that a fix
+  // they are waiting for is already out (unpacked installs never update themselves).
+  const myVersion = chrome.runtime.getManifest?.().version ?? '?'
+  q<HTMLElement>('.ver').textContent = 'v' + myVersion
+  void getConfig().then((c) => newerRelease(c.collectorUrl, myVersion)).then((rel) => {
+    if (!rel || closed) return
+    const a = q<HTMLAnchorElement>('.upd')
+    a.href = rel.url
+    a.textContent = `⬆ Новая версия ${rel.version} — скачать`
+    a.title = rel.notes.join('\n') + '\n\nРаспакуйте поверх папки расширения и нажмите ⟳ на chrome://extensions'
+    a.classList.add('on')
+  })
   const sendBtn = q<HTMLButtonElement>('.send')
   const undoBtn = q<HTMLButtonElement>('[data-act="undo"]')
   const redoBtn = q<HTMLButtonElement>('[data-act="redo"]')
@@ -1125,6 +1142,35 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
 
   const ann = new ImageAnnotator(canvas, { onChange: refresh, onTextRequest: openTextInput })
 
+  // The backdrop is a photo of the page that is STILL UNDER the overlay — until it is not: a draft restored
+  // after a reload, a crop, a scroll or a resized window. Marks are mapped to page elements only while the
+  // frame and the page still line up; otherwise the report goes without them rather than with wrong ones.
+  let liveFrame: { w: number; h: number; sx: number; sy: number; iw: number; ih: number } | null = null
+  function markLive(): void {
+    liveFrame = { w: canvas.width, h: canvas.height, sx: scrollX, sy: scrollY, iw: innerWidth, ih: innerHeight }
+  }
+  function pointedElements(): MarkedElement[] | undefined {
+    const f = liveFrame
+    const prims = ann.getPrims()
+    if (!f || !prims.length) return undefined
+    if (f.w !== canvas.width || f.h !== canvas.height || f.sx !== scrollX || f.sy !== scrollY || f.iw !== innerWidth || f.ih !== innerHeight) return undefined
+    const ours = (el: Element) => el === document.documentElement || el === document.body || !!el.closest(`.${REPLAY_BLOCK_CLASS}`)
+    const prev = host.style.visibility
+    host.style.visibility = 'hidden' // not hit-testable while hidden; restored in the same task, so never painted
+    try {
+      return markElements(prims, canvas.width / innerWidth, (x, y): MarkCandidate[] =>
+        document.elementsFromPoint(x, y).filter((el) => !ours(el)).slice(0, 12).map((el) => {
+          const r = el.getBoundingClientRect()
+          return { tag: el.tagName.toLowerCase(), box: { x: r.left, y: r.top, w: r.width, h: r.height }, selector: () => bestSelector(el) }
+        }))
+    } catch (e) {
+      console.warn('[tester-huester] marks → elements failed', e)
+      return undefined
+    } finally {
+      host.style.visibility = prev
+    }
+  }
+
   // Put the draft back, or start clean. The RESTORED backdrop wins over the screenshot just taken: it is the
   // frame the markup was drawn on, and moving that markup onto a different picture would have it point at the
   // wrong things.
@@ -1134,6 +1180,7 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
     let loaded = true
     try { await ann.setImage(base) } catch { loaded = false }
     if (restored?.prims.length) ann.setPrims(restored.prims as Prim[])
+    if (loaded && !restored?.shot?.dataUrl) markLive()
     hydrating = false
     refresh()
     lastShotDims = `${canvas.width}x${canvas.height}`
@@ -1192,7 +1239,7 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
     attach = true
     trim = null
     ann.clearAll()
-    if (openingShot) { try { await ann.setImage(openingShot) } catch {} }
+    if (openingShot) { try { await ann.setImage(openingShot); markLive() } catch {} }
     refresh()
     updateClipPanel()
     await clearDraft(origin)
@@ -1394,7 +1441,7 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
       if (ctx) context = ctx
       // A re-shoot usually keeps the canvas the same size, so the size-change heuristic would miss it — force
       // the new frame into the draft explicitly.
-      if (ok) { lastShotDims = ''; persistShotIfChanged() }
+      if (ok) { lastShotDims = ''; persistShotIfChanged(); markLive() }
       setMsg(ok ? 'Кадр переснят ✓ — заметка и видео сохранены' : 'Кадр не загрузился', ok ? 'ok' : 'err')
     }
     const onShotKey = (e: KeyboardEvent) => {
@@ -1472,7 +1519,7 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
       host.style.display = ''
       document.addEventListener('keydown', onKey, true)
 
-      if (shotOk) { lastShotDims = ''; persistShotIfChanged() } // the repro's closing frame belongs in the draft
+      if (shotOk) { lastShotDims = ''; persistShotIfChanged(); markLive() } // the repro's closing frame belongs in the draft
 
       if (res?.ok && res.url) {
         video = { url: res.url as string, seconds: Number(res.seconds || 0), bytes: Number(res.bytes || 0), capped: !!res.capped, frames: Array.isArray(res.frames) ? res.frames : [] }
@@ -1620,6 +1667,7 @@ function mount(shot: string, context: ReproBundle | null, draft: Draft | null, g
       // (a tab that outlived an extension reload) so a context-less report still says WHY it is context-less.
       context: {
         ...(context ?? {}),
+        marks: pointedElements(),
         diag: {
           ...recorderDiag(),
           bridge: !!context,

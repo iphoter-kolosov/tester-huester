@@ -1,6 +1,6 @@
 {
   "name": "@th/extension",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -11,7 +11,7 @@
     "build": "wxt build",
     "zip": "wxt zip",
     "postinstall": "wxt prepare",
-    "test": "tsx lib/report.test.ts && tsx lib/replay.test.ts && tsx lib/draft.test.ts && tsx lib/roster.test.ts && tsx lib/keys.test.ts"
+    "test": "tsx lib/report.test.ts && tsx lib/replay.test.ts && tsx lib/draft.test.ts && tsx lib/roster.test.ts && tsx lib/keys.test.ts && tsx lib/update.test.ts"
   },
   "dependencies": {
     "@th/core": "workspace:*",

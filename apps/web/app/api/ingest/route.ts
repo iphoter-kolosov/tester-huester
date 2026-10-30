@@ -75,6 +75,8 @@ function sanitizeContext(v: unknown): Record<string, unknown> | null {
     // The extension's recorder self-report. Kept even when everything else is empty: a report that arrives
     // without a replay must still be able to say why.
     diag: c.diag && typeof c.diag === 'object' && !Array.isArray(c.diag) ? c.diag : undefined,
+    // Which page element each mark on the screenshot points at (extension ≥ 0.2.0, core/capture/marks.ts).
+    marks: Array.isArray(c.marks) && c.marks.length ? arr(c.marks, 30) : undefined,
   }
   try {
     if (JSON.stringify(out).length > 512_000) return null

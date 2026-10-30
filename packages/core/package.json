@@ -13,7 +13,7 @@
     "./annotator": "./src/annotator.ts"
   },
   "scripts": {
-    "test": "tsx src/annotator.test.ts && tsx src/capture/capture.test.ts"
+    "test": "tsx src/annotator.test.ts && tsx src/capture/capture.test.ts && tsx src/capture/marks.test.ts"
   },
   "dependencies": {
     "@medv/finder": "^3.2.0"
