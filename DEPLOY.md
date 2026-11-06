@@ -151,6 +151,13 @@ reports, reads screenshot URL + note + repro steps, and triages status.
 
 ## E. Where the secrets/keys come from
 
+`OWNER_DELEGATE_KEY` is an optional, separate random secret of at least 32 characters, held only by the hub
+and the web service; never give it to project agents. The hub sends it as `x-th-owner-delegate` on
+`PATCH /api/reports/[id]?projectKey=<read_key>` to decide as `owner` on any ticket in that project, or to
+transfer its holder with `takenBy` (an existing active roster handle, including `owner`). The project read
+key and ticket scope are still required. An unset/short secret disables delegation; an invalid supplied
+header returns `403 bad_owner_delegate`, and `takenBy` without delegation returns `403 owner_only`.
+
 - **`DASH_PASSWORD`** — you choose it; set it in `~/tester-huester/.env` on hermes (step A.2). It gates the
   dashboard. Rotate by editing `.env` and `docker compose up -d` (no rebuild needed).
 - **Project key (`ingestKey`)** — created by the seed (step A.4). `ensureProject` is idempotent, so just

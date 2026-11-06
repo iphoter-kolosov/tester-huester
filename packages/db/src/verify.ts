@@ -1,3 +1,5 @@
+import { createHash, timingSafeEqual } from 'node:crypto'
+
 // The single module that decides what a status change needs and who is allowed to make it. Every transport
 // (REST, MCP, dashboard) calls in here — there must never be a second opinion about what closing a ticket costs.
 //
@@ -47,6 +49,15 @@ export const MAX_URL_LEN = 2000
 // working that project shares it. So identity says who is acting, and the read key says which board they may
 // act on; the ownership rules below are a coordination contract between cooperating agents, not a security
 // boundary against a hostile one. Anyone holding the read key could already impersonate anyone on that board.
+
+// A shared project key proves board access, never the right to speak for its owner.
+export function ownerDelegateOk(sent: unknown, configured: string | undefined): boolean {
+  if (!configured || configured.length < 32 || typeof sent !== 'string') return false
+  return timingSafeEqual(
+    createHash('sha256').update(sent).digest(),
+    createHash('sha256').update(configured).digest(),
+  )
+}
 
 export const MAX_IDENTITY_LEN = 64
 // A regex character class for these would have to carry literal control characters in the source, where they

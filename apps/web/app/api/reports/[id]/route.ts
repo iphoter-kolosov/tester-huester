@@ -6,6 +6,7 @@ import {
   checkStatusTransition,
   normalizeIdentity,
   resolveSpeaker,
+  ownerDelegateOk,
   IDENTITY_OWNER,
   type Actor,
   type EventKind,
@@ -67,6 +68,7 @@ function agentSpeaker(body: Record<string, unknown>, projectName: string, projec
 //   • Agent  — `?projectKey=<read_key>` may set `status` and `assignee` ONLY on a report that belongs to that
 //     project. What it may set the status TO depends on who it says it is: an executor can go no further than
 //     `needs_review`; only the agent that FILED the ticket may accept or reject the work (see checkStatusTransition).
+//     The hub may additionally prove owner authority with x-th-owner-delegate, including a takenBy override.
 //   • Human  — the dashboard cookie may set anything, including moving the report to another project.
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -89,8 +91,32 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     if (!report || report.projectId !== project.id) {
       return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
     }
-    const speaker = agentSpeaker(body, project.name, project.id)
-    const actor: Actor = { kind: 'agent', identity: speaker.identity }
+    const delegateHeader = req.headers.get('x-th-owner-delegate')
+    const delegated = ownerDelegateOk(delegateHeader, process.env.OWNER_DELEGATE_KEY)
+    if (delegateHeader !== null && !delegated) {
+      return NextResponse.json({ ok: false, error: 'bad_owner_delegate' }, { status: 403 })
+    }
+    const hasTakenBy = 'takenBy' in body
+    if (hasTakenBy && !delegated) {
+      return NextResponse.json({ ok: false, error: 'owner_only' }, { status: 403 })
+    }
+    // A move returns early; never acknowledge a holder transfer that it would silently skip.
+    if (hasTakenBy && 'toProjectKey' in body) {
+      return NextResponse.json({ ok: false, error: 'bad_request', message: 'Send takenBy separately from toProjectKey.' }, { status: 400 })
+    }
+    const speaker: Speaker = delegated
+      ? { identity: IDENTITY_OWNER, rosterHandle: IDENTITY_OWNER }
+      : agentSpeaker(body, project.name, project.id)
+    const actor: Actor = { kind: delegated ? 'owner' : 'agent', identity: speaker.identity }
+    let takenBy: string | null = null
+    if (hasTakenBy) {
+      const holder = checkAssignee(body.takenBy, repo.listAgents())
+      if (!holder.ok) return NextResponse.json({ ok: false, ...holder.err }, { status: 400 })
+      if (typeof body.takenBy !== 'string' || !holder.assignee) {
+        return NextResponse.json({ ok: false, error: 'bad_assignee', message: 'takenBy must name an existing active agent.' }, { status: 400 })
+      }
+      takenBy = holder.assignee
+    }
     // WHICH running process of this handle is writing. The remote MCP puts its session id in every write body so
     // the journal records write-origin over HTTP too — without this, only a local server writing directly to the
     // DB could stamp it, and every remote fork (the whole live board) would read back session=null and the ticket
@@ -120,9 +146,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 
     const hasStatus = 'status' in body
     const hasAssignee = 'assignee' in body
-    if (!hasStatus && !hasAssignee) {
+    if (!hasStatus && !hasAssignee && !hasTakenBy) {
       return NextResponse.json(
-        { ok: false, error: 'nothing_to_update', message: 'Send "status" (the lifecycle move) and/or "assignee" (hand the ticket to another agent).' },
+        { ok: false, error: 'nothing_to_update', message: 'Send "status" (the lifecycle move) and/or "assignee" (hand the ticket to another agent); owner delegates may also send "takenBy".' },
         { status: 400 },
       )
     }
@@ -135,8 +161,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       const addressed = checkAssignee(body.assignee, roster)
       if (!addressed.ok) return NextResponse.json({ ok: false, ...addressed.err }, { status: 400 })
       assignee = addressed.assignee
-      const handover = checkHandover(actor.identity, assignee, roster)
-      if (!handover.ok) return NextResponse.json({ ok: false, ...handover.err }, { status: 400 })
+      if (actor.kind === 'agent') {
+        const handover = checkHandover(actor.identity, assignee, roster)
+        if (!handover.ok) return NextResponse.json({ ok: false, ...handover.err }, { status: 400 })
+      }
     }
 
     // Validated in full before anything is written, so a refused request leaves the ticket exactly as it was.
@@ -165,7 +193,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
     let comment = null
     if (decision && decision.ok) {
       if (!repo.setStatus(report.id, decision.status)) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
-      if (decision.takenBy) repo.setTaken(report.id, decision.takenBy)
+      if (decision.takenBy && !hasTakenBy) repo.setTaken(report.id, decision.takenBy)
       repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'status', actor: actor.identity, detail: `${report.status} → ${decision.status}`, session: writeSession })
       // The comment carries the work report, so the thread reads as a record: what changed, where to look, how to
       // check it, and what proves it.
@@ -173,7 +201,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         comment = repo.addComment({
           reportId: report.id,
           author: actor.identity,
-          authorKind: 'agent',
+          authorKind: actor.kind === 'owner' ? 'human' : 'agent',
           body: decision.claim.body,
           verifyUrl: decision.claim.verifyUrl,
           verifySteps: decision.claim.verifySteps,
@@ -182,11 +210,22 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
         repo.logEvent({ projectId: report.projectId, reportId: report.id, kind: 'comment', actor: actor.identity, detail: decision.claim.body.slice(0, 200), session: writeSession })
       }
     }
+    if (hasTakenBy) {
+      if (!repo.setTaken(report.id, takenBy)) return NextResponse.json({ ok: false, error: 'not_found' }, { status: 404 })
+      repo.logEvent({
+        projectId: report.projectId,
+        reportId: report.id,
+        kind: 'assigned',
+        actor: actor.identity,
+        detail: `holder: ${report.takenBy ?? '—'} → ${takenBy}`,
+        session: writeSession,
+      })
+    }
     return NextResponse.json({
       ok: true,
       status: decision && decision.ok ? decision.status : report.status,
       assignee: hasAssignee ? assignee : report.assignee,
-      takenBy: decision && decision.ok && decision.takenBy ? decision.takenBy : report.takenBy,
+      takenBy: hasTakenBy ? takenBy : decision && decision.ok && decision.takenBy ? decision.takenBy : report.takenBy,
       agent: actor.identity,
       comment,
     })

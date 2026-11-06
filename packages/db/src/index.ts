@@ -5,6 +5,7 @@ export type {
   AgentSession, SessionGroup, AgentActivity, FlowDay, Orphan, SystemHealth,
 } from './db'
 export {
+  ownerDelegateOk,
   checkAgentStatusClaim,
   checkAssignee,
   checkHandover,

@@ -22,6 +22,8 @@ services:
       DASH_PASSWORD: ${DASH_PASSWORD:?DASH_PASSWORD is required (set it in .env or the shell)}
       # Необязательно: секрет (base32) для входа кодом из приложения-аутентификатора; заводится кнопкой из хаба (th-totp-enroll).
       DASH_TOTP_SECRET: ${DASH_TOTP_SECRET:-}
+      # Optional hub-only credential for owner decisions; never share it with project agents.
+      OWNER_DELEGATE_KEY: ${OWNER_DELEGATE_KEY:-}
     volumes:
       # Persist the SQLite DB + uploaded blobs across redeploys.
       - th-data:/data

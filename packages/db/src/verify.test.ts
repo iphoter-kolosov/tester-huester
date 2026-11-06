@@ -4,6 +4,7 @@
 // guards unreachable.
 import assert from 'node:assert/strict'
 import {
+  ownerDelegateOk,
   checkAgentStatusClaim,
   checkAssignee,
   checkHandover,
@@ -39,6 +40,18 @@ function t(name: string, fn: () => void) {
   passed++
   void name
 }
+
+// The delegate credential is independent of any self-declared agent identity.
+t('accepts only the configured owner delegate credential', () => {
+  const configured = 'test-owner-delegate-credential-32!'
+  assert.equal(ownerDelegateOk(configured, configured), true)
+  for (const sent of ['x'.repeat(configured.length), 'wrong', '', null, undefined, 42, {}, [configured]]) {
+    assert.equal(ownerDelegateOk(sent, configured), false)
+  }
+  assert.equal(ownerDelegateOk('x'.repeat(31), 'x'.repeat(31)), false)
+  assert.equal(ownerDelegateOk('', ''), false)
+  assert.equal(ownerDelegateOk(configured, undefined), false)
+})
 
 // ── normalizeVerifyUrl ────────────────────────────────────────────────────────────────────────────────────
 t('accepts an absolute https link', () => {
